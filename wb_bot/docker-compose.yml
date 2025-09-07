@@ -1,0 +1,200 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: wb_bot_postgres
+    environment:
+      POSTGRES_DB: wb_bot
+      POSTGRES_USER: wb_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secure_password_change_me}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - wb_bot_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wb_user -d wb_bot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: wb_bot_redis
+    command: redis-server --appendonly yes --appendfsync everysec
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - wb_bot_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # WB Bot Application
+  wb_bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: wb_bot_app
+    environment:
+      # Database configuration
+      DB_URL: postgresql+asyncpg://wb_user:${DB_PASSWORD:-secure_password_change_me}@postgres:5432/wb_bot
+      DB_ECHO: ${DB_ECHO:-false}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-20}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-30}
+      
+      # Redis configuration
+      REDIS_URL: redis://redis:6379/0
+      
+      # Telegram configuration
+      TG_BOT_TOKEN: ${TG_BOT_TOKEN}
+      TG_WEBHOOK_URL: ${TG_WEBHOOK_URL:-}
+      TG_WEBHOOK_SECRET: ${TG_WEBHOOK_SECRET:-}
+      TG_ADMIN_IDS: ${TG_ADMIN_IDS:-}
+      
+      # Security configuration
+      SECURITY_ENCRYPTION_KEY: ${SECURITY_ENCRYPTION_KEY}
+      SECURITY_JWT_SECRET: ${SECURITY_JWT_SECRET}
+      
+      # Application configuration
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      DEBUG: ${DEBUG:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      
+      # Monitoring configuration
+      MONITORING_MIN_CHECK_INTERVAL: ${MONITORING_MIN_CHECK_INTERVAL:-30}
+      MONITORING_MAX_CHECK_INTERVAL: ${MONITORING_MAX_CHECK_INTERVAL:-1}
+      MONITORING_CACHE_TTL: ${MONITORING_CACHE_TTL:-5}
+      MONITORING_MAX_CONCURRENT_REQUESTS: ${MONITORING_MAX_CONCURRENT_REQUESTS:-1000}
+      
+      # Wildberries API configuration
+      WB_BASE_URL: ${WB_BASE_URL:-https://suppliers-api.wildberries.ru}
+      WB_TIMEOUT: ${WB_TIMEOUT:-30}
+      WB_MAX_RETRIES: ${WB_MAX_RETRIES:-3}
+      WB_RATE_LIMIT_DELAY: ${WB_RATE_LIMIT_DELAY:-60}
+    
+    volumes:
+      - ./logs:/app/logs:rw
+      - ./data:/app/data:rw
+    
+    ports:
+      - "8080:8080"
+    
+    networks:
+      - wb_bot_network
+    
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    restart: unless-stopped
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+
+  # Database migration service
+  migration:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: wb_bot_migration
+    environment:
+      DB_URL: postgresql+asyncpg://wb_user:${DB_PASSWORD:-secure_password_change_me}@postgres:5432/wb_bot
+    command: ["alembic", "upgrade", "head"]
+    volumes:
+      - ./alembic:/app/alembic:ro
+      - ./alembic.ini:/app/alembic.ini:ro
+    networks:
+      - wb_bot_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # Monitoring and metrics (optional)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: wb_bot_prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - wb_bot_network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: wb_bot_grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - wb_bot_network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+networks:
+  wb_bot_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
