@@ -8,7 +8,7 @@ from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKe
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-from ...services.browser_automation import WBBrowserAutomationPro
+from ...services.browser_manager import browser_manager
 from ...utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -22,10 +22,6 @@ class BrowserBookingStates(StatesGroup):
     selecting_supply = State()
     selecting_dates = State()
     monitoring = State()
-
-
-# Хранилище браузерных сессий
-browser_sessions = {}
 
 
 @router.callback_query(F.data == "browser_booking")
@@ -56,12 +52,10 @@ async def browser_stop(callback: CallbackQuery):
     """Закрытие браузера."""
     user_id = callback.from_user.id
     
-    if user_id in browser_sessions:
-        try:
-            browser = browser_sessions[user_id]
-            await browser.close_browser()
-            del browser_sessions[user_id]
-            
+    try:
+        closed = await browser_manager.close_browser(user_id)
+        
+        if closed:
             await callback.message.edit_text(
                 "✅ <b>Браузер закрыт</b>\n\n"
                 "Сессия завершена. Можете запустить новую.",
@@ -71,28 +65,25 @@ async def browser_stop(callback: CallbackQuery):
                     [InlineKeyboardButton(text="⬅️ Назад", callback_data="auto_booking")]
                 ])
             )
-            
-        except Exception as e:
-            logger.error(f"Error closing browser: {e}")
-            if user_id in browser_sessions:
-                del browser_sessions[user_id]
-            
+        else:
             await callback.message.edit_text(
-                "⚠️ <b>Браузер закрыт принудительно</b>\n\n"
-                "Возможно были ошибки, но сессия завершена.",
+                "ℹ️ <b>Браузер используется другими пользователями</b>\n\n"
+                "Вы отключены от браузера, но он продолжает работать для других.",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="🚀 Запустить снова", callback_data="browser_booking")],
+                    [InlineKeyboardButton(text="🔄 Подключиться заново", callback_data="browser_booking")],
                     [InlineKeyboardButton(text="⬅️ Назад", callback_data="auto_booking")]
                 ])
             )
-    else:
+            
+    except Exception as e:
+        logger.error(f"Error closing browser: {e}")
         await callback.message.edit_text(
-            "ℹ️ <b>Браузер не запущен</b>\n\n"
-            "Нет активной сессии для закрытия.",
+            "⚠️ <b>Ошибка при закрытии браузера</b>\n\n"
+            "Попробуйте еще раз:",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🚀 Запустить браузер", callback_data="browser_booking")],
+                [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data="browser_stop")],
                 [InlineKeyboardButton(text="⬅️ Назад", callback_data="auto_booking")]
             ])
         )
@@ -107,7 +98,7 @@ async def browser_start_mode_fixed(callback: CallbackQuery, state: FSMContext):
     headless = True  # Всегда скрытый режим
     
     # Проверяем есть ли уже запущенный браузер
-    if user_id in browser_sessions:
+    if browser_manager.is_browser_active():
         await callback.message.edit_text(
             "⚠️ <b>Браузер уже запущен!</b>\n\n"
             "Сначала закройте текущую сессию:",
@@ -129,15 +120,31 @@ async def browser_start_mode_fixed(callback: CallbackQuery, state: FSMContext):
     )
     
     try:
-        # Создаем экземпляр профессионального браузера (ВИДИМЫЙ РЕЖИМ)
-        browser = WBBrowserAutomationPro(headless=False, debug_mode=True)
-        success = await browser.start_browser(headless=False)
+        # Получаем браузер через единый менеджер
+        browser = await browser_manager.get_browser(user_id, headless=False, debug_mode=True)
         
-        if not success:
+        if not browser:
             raise Exception("Не удалось запустить браузер")
         
-        # Сохраняем в сессии ТОЛЬКО если запуск успешен
-        browser_sessions[user_id] = browser
+        # Проверяем, не авторизован ли пользователь уже
+        try:
+            should_skip = await browser.should_skip_login()
+            if should_skip:
+                await loading_msg.edit_text(
+                    "✅ <b>Вы уже авторизованы в WB!</b>\n\n"
+                    "🎉 Браузер готов к работе!\n\n"
+                    "Выберите действие:",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="🔍 Найти слоты", callback_data="browser_find_slots")],
+                        [InlineKeyboardButton(text="📦 Мои поставки", callback_data="browser_my_supplies")],
+                        [InlineKeyboardButton(text="🤖 Автомониторинг", callback_data="browser_auto_monitor")],
+                        [InlineKeyboardButton(text="❌ Закрыть браузер", callback_data="browser_close")]
+                    ])
+                )
+                await state.clear()
+                return
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка проверки авторизации: {e}")
         
         await loading_msg.edit_text(
             f"✅ <b>Браузер запущен в {mode_text} режиме!</b>\n\n"
@@ -178,7 +185,7 @@ async def process_phone(message: Message, state: FSMContext):
         )
         return
     
-    browser = browser_sessions.get(user_id)
+    browser = await browser_manager.get_browser(user_id)
     if not browser:
         await message.answer("❌ Сессия браузера потеряна. Начните заново.")
         await state.clear()
@@ -228,7 +235,7 @@ async def process_sms_code(message: Message, state: FSMContext):
     if code.startswith('/'):
         return
     
-    browser = browser_sessions.get(user_id)
+    browser = await browser_manager.get_browser(user_id)
     if not browser:
         await message.answer("❌ Сессия браузера потеряна.")
         await state.clear()
@@ -249,9 +256,25 @@ async def process_sms_code(message: Message, state: FSMContext):
     
     try:
         # Автоматически вводим СМС код в форму WB
-        success = await browser.login_step2_sms(code)
+        result = await browser.login_step2_sms(code)
         
-        if success:
+        if result == "email_required":
+            await loading_msg.edit_text(
+                "📧 <b>Требуется подтверждение по email</b>\n\n"
+                "WB требует дополнительное подтверждение через электронную почту.\n\n"
+                "📋 <b>Что делать:</b>\n"
+                "1️⃣ Проверьте свою электронную почту\n"
+                "2️⃣ Найдите письмо от Wildberries\n"
+                "3️⃣ Перейдите по ссылке в письме\n"
+                "4️⃣ После подтверждения попробуйте снова\n\n"
+                "⚠️ Без подтверждения email авторизация невозможна.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data="browser_start")],
+                    [InlineKeyboardButton(text="❌ Отмена", callback_data="browser_close")]
+                ])
+            )
+            await state.clear()
+        elif result:
             await loading_msg.edit_text(
                 "✅ <b>Успешный вход в WB!</b>\n\n"
                 "🎉 Браузер готов к работе!\n\n"
@@ -282,7 +305,7 @@ async def process_sms_code(message: Message, state: FSMContext):
 async def browser_find_slots(callback: CallbackQuery):
     """Поиск доступных слотов через браузер."""
     user_id = callback.from_user.id
-    browser = browser_sessions.get(user_id)
+    browser = await browser_manager.get_browser(user_id)
     
     if not browser:
         await callback.answer("❌ Сессия браузера не найдена", show_alert=True)
@@ -338,7 +361,7 @@ async def browser_find_slots(callback: CallbackQuery):
 async def browser_auto_monitor(callback: CallbackQuery, state: FSMContext):
     """Настройка автоматического мониторинга."""
     user_id = callback.from_user.id
-    browser = browser_sessions.get(user_id)
+    browser = await browser_manager.get_browser(user_id)
     
     if not browser:
         await callback.answer("❌ Сессия браузера не найдена", show_alert=True)
@@ -365,11 +388,10 @@ async def browser_auto_monitor(callback: CallbackQuery, state: FSMContext):
 async def browser_close(callback: CallbackQuery):
     """Закрытие браузера."""
     user_id = callback.from_user.id
-    browser = browser_sessions.get(user_id)
-    
-    if browser:
-        browser.close_browser()
-        del browser_sessions[user_id]
+    try:
+        await browser_manager.close_browser(user_id)
+    except Exception as e:
+        logger.error(f"Error closing browser: {e}")
         
     await callback.message.edit_text(
         "✅ Браузер закрыт.\n\n"
@@ -378,3 +400,66 @@ async def browser_close(callback: CallbackQuery):
             [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")]
         ])
     )
+
+
+@router.callback_query(F.data == "browser_my_supplies")
+async def browser_my_supplies(callback: CallbackQuery):
+    """Показать мои поставки через браузер."""
+    user_id = callback.from_user.id
+    browser = await browser_manager.get_browser(user_id)
+    
+    if not browser:
+        await callback.answer("❌ Сессия браузера не найдена", show_alert=True)
+        return
+    
+    loading_msg = await callback.message.edit_text(
+        "📦 Загружаю ваши поставки...\n"
+        "⏳ Это может занять несколько секунд...",
+        parse_mode="HTML"
+    )
+    
+    try:
+        # Переходим на страницу поставок
+        await browser.navigate_to_supplies_page()
+        await asyncio.sleep(2)
+        
+        # Получаем список поставок
+        supplies = await browser.get_my_supplies()
+        
+        if supplies:
+            text = f"📦 <b>Ваши поставки ({len(supplies)} шт):</b>\n\n"
+            
+            for i, supply in enumerate(supplies[:10], 1):
+                status = supply.get('status', 'Неизвестно')
+                date = supply.get('date', 'Не указана')
+                text += f"{i}. 🆔 #{supply.get('id', 'N/A')} - {status}\n"
+                text += f"   📅 Дата: {date}\n\n"
+            
+            if len(supplies) > 10:
+                text += f"... и еще {len(supplies) - 10} поставок"
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Обновить", callback_data="browser_my_supplies")],
+                [InlineKeyboardButton(text="⬅️ Назад", callback_data="browser_menu")]
+            ])
+            
+            await loading_msg.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+        else:
+            await loading_msg.edit_text(
+                "😔 Поставки не найдены.\n"
+                "Создайте поставку в личном кабинете WB.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔄 Обновить", callback_data="browser_my_supplies")],
+                    [InlineKeyboardButton(text="⬅️ Назад", callback_data="browser_menu")]
+                ])
+            )
+            
+    except Exception as e:
+        logger.error(f"Error getting supplies: {e}")
+        await loading_msg.edit_text(
+            "❌ Ошибка при загрузке поставок.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Повторить", callback_data="browser_my_supplies")],
+                [InlineKeyboardButton(text="⬅️ Назад", callback_data="browser_menu")]
+            ])
+        )

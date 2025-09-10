@@ -11,15 +11,20 @@ import asyncio
 
 from ...utils.logger import get_logger
 from ...services.wb_supplies_api import WBSuppliesAPIClient
-from ...services.browser_automation import WBBrowserAutomationPro
-from .callbacks import user_api_keys
+from ...services.browser_manager import browser_manager
+# Removed user_api_keys - using PostgreSQL database only
+
+async def safe_edit_text(message, text, **kwargs):
+    """Безопасное редактирование сообщения с обработкой ошибки 'message is not modified'."""
+    try:
+        await message.edit_text(text, **kwargs)
+    except Exception as e:
+        if "message is not modified" not in str(e):
+            logger.warning(f"⚠️ Ошибка редактирования сообщения: {e}")
 from ..keyboards.inline import back_to_main_menu_keyboard
 
 logger = get_logger(__name__)
 router = Router()
-
-# Глобальное хранилище сессий браузера для бронирования
-booking_browser_sessions = {}
 
 # Глобальное хранилище мониторинга слотов
 monitoring_sessions = {}
@@ -31,6 +36,8 @@ class BookingStates(StatesGroup):
     selecting_dates = State()
     confirming_booking = State()
     monitoring_slots = State()
+    waiting_for_phone = State()
+    waiting_for_sms_code = State()
 
 
 def create_date_range_keyboard() -> InlineKeyboardMarkup:
@@ -106,9 +113,56 @@ async def start_booking_process(callback: CallbackQuery, state: FSMContext):
         return
     
     supply_name = selected_supply.get("name", f"Поставка #{supply_id}")
+    preorder_id = selected_supply.get("preorderId", supply_id)  # Берем preorderId если есть
     
+    # Сохраняем данные для бронирования
+    await state.update_data(
+        booking_supply_id=supply_id,
+        selected_supply=selected_supply
+    )
+    
+    # Показываем меню выбора способа бронирования
     await callback.message.edit_text(
         f"🎯 <b>Бронирование поставки</b>\n\n"
+        f"📦 <b>{supply_name}</b>\n"
+        f"🆔 ID поставки: <code>{supply_id}</code>\n"
+        f"📋 ID заказа: <code>{preorder_id}</code>\n\n"
+        f"Выберите способ бронирования:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🌐 Браузерное бронирование (рекомендуется)",
+                callback_data=f"browser_book_supply:{supply_id}"
+            )],
+            [InlineKeyboardButton(
+                text="🤖 Через API (выбор складов)",
+                callback_data=f"api_book_supply:{supply_id}"
+            )],
+            [InlineKeyboardButton(
+                text="⬅️ Назад",
+                callback_data=f"supply_select:{supply_id}"
+            )]
+        ])
+    )
+
+
+@router.callback_query(F.data.startswith("api_book_supply:"))
+async def api_book_supply(callback: CallbackQuery, state: FSMContext):
+    """Бронирование через API с выбором складов."""
+    supply_id = callback.data.split(":")[1]
+    
+    # Получаем данные поставки
+    data = await state.get_data()
+    selected_supply = data.get("selected_supply")
+    
+    if not selected_supply:
+        await callback.answer("❌ Поставка не найдена", show_alert=True)
+        return
+    
+    supply_name = selected_supply.get("name", f"Поставка #{supply_id}")
+    
+    await callback.message.edit_text(
+        f"🤖 <b>Бронирование через API</b>\n\n"
         f"📦 <b>{supply_name}</b>\n"
         f"🆔 ID: <code>{supply_id}</code>\n\n"
         f"📅 Выберите период для поиска слотов:",
@@ -121,14 +175,29 @@ async def start_booking_process(callback: CallbackQuery, state: FSMContext):
     await state.set_state(BookingStates.selecting_dates)
 
 
+@router.callback_query(F.data == "custom_dates")
+async def custom_date_selection(callback: CallbackQuery, state: FSMContext):
+    """Обработчик ручного выбора дат."""
+    await callback.message.edit_text(
+        "📅 <b>Выбор дат вручную</b>\n\n"
+        "Отправьте даты в формате: ГГГГ-ММ-ДД ГГГГ-ММ-ДД\n"
+        "Например: 2025-09-10 2025-09-17\n\n"
+        "Или выберите один из предложенных вариантов:",
+        parse_mode="HTML",
+        reply_markup=create_date_selection_keyboard()
+    )
+    await state.set_state(BookingStates.selecting_dates)
+
+
 @router.callback_query(F.data.startswith("date_range:"))
 async def process_date_range(callback: CallbackQuery, state: FSMContext):
     """Обрабатывает выбор диапазона дат."""
     _, date_from_str, date_to_str = callback.data.split(":")
     user_id = callback.from_user.id
     
-    # Получаем API ключи пользователя
-    api_keys = user_api_keys.get(user_id, [])
+    # Получаем API ключи пользователя из PostgreSQL
+    from .callbacks import get_user_api_keys_list
+    api_keys = await get_user_api_keys_list(user_id)
     if not api_keys:
         await callback.answer("❌ API ключ не найден", show_alert=True)
         return
@@ -220,6 +289,55 @@ async def process_date_range(callback: CallbackQuery, state: FSMContext):
         )
 
 
+@router.callback_query(F.data == "back_to_supply")
+async def back_to_supply_handler(callback: CallbackQuery, state: FSMContext):
+    """Возвращает к выбранной поставке."""
+    # Получаем данные из состояния
+    data = await state.get_data()
+    selected_supply = data.get("selected_supply")
+    
+    if not selected_supply:
+        # Если нет выбранной поставки, возвращаемся к списку
+        await callback.message.edit_text(
+            "⬅️ Возвращаемся к списку поставок...",
+            parse_mode="HTML"
+        )
+        # Вызываем обработчик списка поставок
+        from .supplies_management import show_supplies_menu
+        await show_supplies_menu(callback, state)
+        return
+    
+    supply_id = selected_supply.get("id")
+    supply_name = selected_supply.get("name", f"Поставка #{supply_id}")
+    supply_status = selected_supply.get("status", "unknown")
+    created_at = selected_supply.get("createDate", "")
+    
+    # Форматируем дату создания
+    formatted_date = "Неизвестно"
+    if created_at:
+        try:
+            from datetime import datetime
+            dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            formatted_date = dt.strftime("%d.%m.%Y %H:%M")
+        except:
+            formatted_date = created_at
+    
+    await callback.message.edit_text(
+        f"📦 <b>{supply_name}</b>\n\n"
+        f"🆔 ID: <code>{supply_id}</code>\n"
+        f"📊 Статус: {supply_status}\n"
+        f"📅 Создана: {formatted_date}\n\n"
+        f"Выберите действие:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎯 Забронировать слот", callback_data=f"book_supply:{supply_id}")],
+            [InlineKeyboardButton(text="👁‍🗨 Мониторинг слотов", callback_data=f"monitor_supply:{supply_id}")],
+            [InlineKeyboardButton(text="📋 Детали поставки", callback_data=f"supply_details:{supply_id}")],
+            [InlineKeyboardButton(text="⬅️ К списку поставок", callback_data="view_supplies")]
+        ])
+    )
+
+
 @router.callback_query(F.data == "auto_book_supply")
 async def auto_book_supply_handler(callback: CallbackQuery, state: FSMContext):
     """Обрабатывает кнопку автобронирования."""
@@ -261,35 +379,41 @@ async def browser_book_supply(callback: CallbackQuery, state: FSMContext):
     # Получаем данные из состояния
     data = await state.get_data()
     selected_supply = data.get("selected_supply")
-    date_from = data.get("date_from", "2025-09-07")
-    date_to = data.get("date_to", "2025-09-14")
     
     if not selected_supply:
         await callback.answer("❌ Поставка не найдена", show_alert=True)
         return
     
     supply_name = selected_supply.get("name", f"Поставка #{supply_id}")
-    preorder_id = selected_supply.get("preorderID")
     
-    await callback.message.edit_text(
+    # Получаем preorderId - проверяем разные варианты написания
+    preorder_id = selected_supply.get("preorderId") or selected_supply.get("preorderID") or selected_supply.get("preorder_id")
+    
+    # Если preorderId не найден, используем сам supply_id
+    if not preorder_id:
+        logger.warning(f"⚠️ preorderId не найден для поставки {supply_id}, используем supply_id")
+        preorder_id = supply_id
+    
+    await safe_edit_text(
+        callback.message,
         f"🤖 <b>Запускаю автоматическое бронирование...</b>\n\n"
         f"📦 <b>{supply_name}</b>\n"
         f"🆔 ID: <code>{supply_id}</code>\n"
-        f"📋 Заказ: <code>{preorder_id}</code>\n"
-        f"📅 Период: {date_from} - {date_to}\n\n"
+        f"📋 Заказ: <code>{preorder_id}</code>\n\n"
         f"⏳ Открываю браузер и выполняю вход...",
         parse_mode="HTML"
     )
     
     try:
-        # Создаем экземпляр браузерной автоматизации
-        browser = WBBrowserAutomationPro(headless=False, debug_mode=True)
+        # Получаем браузер через единый менеджер
+        browser = await browser_manager.get_browser(user_id, headless=False, debug_mode=True)
         
-        # Запускаем браузер
-        if not await browser.start_browser():
+        if not browser or not browser.page:
             await callback.message.edit_text(
-                f"❌ <b>Ошибка запуска браузера</b>\n\n"
-                f"Не удалось запустить браузер для автоматизации.",
+                f"❌ <b>Ошибка получения браузера</b>\n\n"
+                f"Не удалось получить экземпляр браузера для автоматизации.\n"
+                f"Браузер: {browser is not None}\n"
+                f"Страница: {browser.page is not None if browser else False}",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"browser_book_supply:{supply_id}")],
@@ -298,34 +422,68 @@ async def browser_book_supply(callback: CallbackQuery, state: FSMContext):
             )
             return
         
-        # Проверяем авторизацию
-        await callback.message.edit_text(
-            f"🤖 <b>Браузер запущен!</b>\n\n"
-            f"📦 <b>{supply_name}</b>\n"
-            f"🔍 Проверяю авторизацию...",
-            parse_mode="HTML"
-        )
-        
-        # Проверяем, авторизован ли пользователь
-        is_logged_in = await browser.check_if_logged_in()
-        
-        if not is_logged_in:
-            # Если не авторизован - требуем вход через браузерное бронирование
+        # Проверяем есть ли валидная сессия
+        should_skip_login = await browser.should_skip_login()
+        if should_skip_login:
             await callback.message.edit_text(
-                f"🔐 <b>Требуется авторизация</b>\n\n"
+                f"✅ <b>Найдена сохраненная сессия!</b>\n\n"
                 f"📦 <b>{supply_name}</b>\n"
-                f"❌ Пользователь не авторизован в WB\n\n"
-                f"💡 Сначала выполните вход через браузер:\n"
-                f"1. Нажмите 'Войти в WB'\n"
-                f"2. Введите номер телефона и SMS-код\n"
-                f"3. После входа повторите бронирование",
+                f"🔄 Запускаю браузер с сохраненной авторизацией...",
+                parse_mode="HTML"
+            )
+        
+        # Браузер уже запущен через browser_manager, проверяем его состояние
+        if not browser.page or browser.page.is_closed():
+            await callback.message.edit_text(
+                f"❌ <b>Ошибка состояния браузера</b>\n\n"
+                f"Браузер не готов к работе.",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="🔐 Войти в WB", callback_data="browser_login")],
+                    [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"browser_book_supply:{supply_id}")],
                     [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_supply")]
                 ])
             )
-            await browser.close_browser()
+            return
+        
+        # Проверяем авторизацию (если не пропускали ранее)
+        if not should_skip_login:
+            await callback.message.edit_text(
+                f"🤖 <b>Браузер запущен!</b>\n\n"
+                f"📦 <b>{supply_name}</b>\n"
+                f"🔍 Проверяю авторизацию...",
+                parse_mode="HTML"
+            )
+            
+            # Проверяем, авторизован ли пользователь
+            is_logged_in = await browser.check_if_logged_in()
+        else:
+            # Если сессия была валидна, считаем что пользователь авторизован
+            is_logged_in = True
+            await callback.message.edit_text(
+                f"✅ <b>Авторизация подтверждена!</b>\n\n"
+                f"📦 <b>{supply_name}</b>\n"
+                f"🎯 Переходим к бронированию поставки...",
+                parse_mode="HTML"
+            )
+        
+        if not is_logged_in:
+            # Если не авторизован - начинаем процесс логина
+            await callback.message.edit_text(
+                f"🔐 <b>Требуется авторизация</b>\n\n"
+                f"📦 <b>{supply_name}</b>\n"
+                f"📱 Введите номер телефона для входа в WB:\n"
+                f"(в формате +79991234567 или +996500441234)",
+                parse_mode="HTML"
+            )
+            
+            # Сохраняем данные поставки в состоянии
+            await state.update_data(
+                supply_id=supply_id,
+                supply_name=supply_name,
+                preorder_id=preorder_id,
+                selected_supply=selected_supply
+            )
+            await state.set_state(BookingStates.waiting_for_phone)
             return
         
         # Обновляем статус
@@ -337,24 +495,28 @@ async def browser_book_supply(callback: CallbackQuery, state: FSMContext):
         )
         
         # Выполняем бронирование поставки
-        booking_success = await browser.book_supply(
+        # Выполняем бронирование с новым методом
+        booking_result = await browser.book_supply_by_id(
             supply_id=str(supply_id),
             preorder_id=str(preorder_id),
-            date_from=date_from,
-            date_to=date_to
+            min_hours_ahead=80  # Бронируем минимум на 80 часов вперед как ты просил
         )
         
-        # Закрываем браузер
-        await browser.close_browser()
+        booking_success = booking_result["success"]
+        booking_message = booking_result["message"]
+        booked_date = booking_result.get("booked_date")
+        
+        # НЕ закрываем браузер - оставляем его открытым для пользователя
+        # await browser.close_browser()
         
         if booking_success:
             await callback.message.edit_text(
-                f"🎉 <b>ПОСТАВКА ЗАБРОНИРОВАНА!</b>\n\n"
+                f"🎉 <b>ПОСТАВКА УСПЕШНО ЗАБРОНИРОВАНА!</b>\n\n"
                 f"📦 <b>{supply_name}</b>\n"
                 f"🆔 ID: <code>{supply_id}</code>\n"
                 f"📋 Заказ: <code>{preorder_id}</code>\n"
-                f"📅 Период: {date_from} - {date_to}\n\n"
-                f"✅ Слот успешно забронирован через браузер!",
+                f"📅 Забронирована на: <b>{booked_date}</b>\n\n"
+                f"✅ {booking_message}",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="📦 К поставкам", callback_data="view_supplies")],
@@ -362,25 +524,59 @@ async def browser_book_supply(callback: CallbackQuery, state: FSMContext):
                 ])
             )
         else:
-            await callback.message.edit_text(
-                f"⚠️ <b>Бронирование не удалось</b>\n\n"
-                f"📦 <b>{supply_name}</b>\n"
-                f"❌ Доступных слотов нет или произошла ошибка.\n\n"
-                f"Попробуйте позже или выберите другие даты.",
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"browser_book_supply:{supply_id}")],
-                    [InlineKeyboardButton(text="📅 Другие даты", callback_data=f"book_supply:{supply_id}")],
+            # Проверяем тип ошибки
+            if "Не авторизован" in booking_message:
+                error_text = (
+                    f"🔐 <b>Требуется авторизация</b>\n\n"
+                    f"📦 <b>{supply_name}</b>\n"
+                    f"❌ {booking_message}\n\n"
+                    f"Сначала войдите в аккаунт WB через браузерное бронирование."
+                )
+                buttons = [
+                    [InlineKeyboardButton(text="🔐 Войти в аккаунт", callback_data="browser_booking")],
                     [InlineKeyboardButton(text="⬅️ К поставкам", callback_data="view_supplies")]
-                ])
+                ]
+            elif "попыток" in booking_message.lower():
+                error_text = (
+                    f"⚠️ <b>Бронирование не удалось</b>\n\n"
+                    f"📦 <b>{supply_name}</b>\n"
+                    f"🔄 Попытки: {booking_result.get('attempts', 0)}\n"
+                    f"❌ {booking_message}\n\n"
+                    f"Попробуйте позже или выберите другие параметры."
+                )
+                buttons = [
+                    [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"browser_book_supply:{supply_id}")],
+                    [InlineKeyboardButton(text="⬅️ К поставкам", callback_data="view_supplies")]
+                ]
+            else:
+                error_text = (
+                    f"⚠️ <b>Бронирование не удалось</b>\n\n"
+                    f"📦 <b>{supply_name}</b>\n"
+                    f"❌ {booking_message}\n\n"
+                    f"Попробуйте позже или обратитесь в поддержку."
+                )
+                buttons = [
+                    [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"browser_book_supply:{supply_id}")],
+                    [InlineKeyboardButton(text="⬅️ К поставкам", callback_data="view_supplies")]
+                ]
+            
+            await callback.message.edit_text(
+                error_text,
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
             )
         
     except Exception as e:
         logger.error(f"❌ Ошибка автоматического бронирования: {e}")
+        
+        # Очищаем текст ошибки от HTML тегов
+        import html
+        error_text = html.escape(str(e))
+        
         await callback.message.edit_text(
             f"❌ <b>Ошибка бронирования</b>\n\n"
             f"📦 <b>{supply_name}</b>\n"
-            f"💥 Произошла ошибка: <code>{str(e)}</code>",
+            f"💥 Произошла ошибка: <code>{error_text}</code>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"browser_book_supply:{supply_id}")],
@@ -466,16 +662,14 @@ async def start_auto_booking(callback: CallbackQuery, state: FSMContext):
     )
     
     try:
-        # Создаем браузерную сессию для автобронирования
-        browser = WBBrowserAutomationPro(headless=True, debug_mode=False)
-        success = await browser.start_browser(headless=True)
+        # Получаем браузер через единый менеджер
+        browser = await browser_manager.get_browser(user_id, headless=True, debug_mode=False)
         
-        if not success:
+        if not browser:
             raise Exception("Не удалось запустить браузер")
         
-        # Сохраняем браузерную сессию
-        booking_browser_sessions[user_id] = {
-            "browser": browser,
+        # Сохраняем данные для автобронирования
+        monitoring_sessions[user_id] = {
             "supply_id": booking_supply_id,
             "warehouse_id": warehouse_id,
             "date_from": date_from,
@@ -539,8 +733,9 @@ async def check_available_slots(callback: CallbackQuery, state: FSMContext):
     )
     
     try:
-        # Получаем API ключ пользователя
-        api_keys = user_api_keys.get(user_id, [])
+        # Получаем API ключ пользователя из PostgreSQL
+        from .callbacks import get_user_api_keys_list
+        api_keys = await get_user_api_keys_list(user_id)
         if not api_keys:
             await callback.message.edit_text(
                 "❌ API ключ не найден",
@@ -613,11 +808,16 @@ async def check_available_slots(callback: CallbackQuery, state: FSMContext):
 
 async def auto_booking_task(user_id: int, bot):
     """Фоновая задача автобронирования."""
-    session = booking_browser_sessions.get(user_id)
+    session = monitoring_sessions.get(user_id)
     if not session:
         return
     
-    browser = session["browser"]
+    # Получаем браузер через единый менеджер
+    browser = await browser_manager.get_browser(user_id, headless=True, debug_mode=False)
+    if not browser:
+        logger.error(f"❌ Не удалось получить браузер для пользователя {user_id}")
+        return
+    
     supply_id = session["supply_id"]
     warehouse_id = session["warehouse_id"]
     date_from = session["date_from"]
@@ -684,12 +884,9 @@ async def auto_booking_task(user_id: int, bot):
         )
     finally:
         # Очищаем сессию
-        if user_id in booking_browser_sessions:
-            try:
-                await booking_browser_sessions[user_id]["browser"].close_browser()
-            except:
-                pass
-            del booking_browser_sessions[user_id]
+        if user_id in monitoring_sessions:
+            del monitoring_sessions[user_id]
+        await browser_manager.close_browser(user_id)
         
         logger.info(f"🔴 Автобронирование остановлено для пользователя {user_id}")
 
@@ -699,14 +896,10 @@ async def stop_auto_booking(callback: CallbackQuery):
     """Останавливает автобронирование."""
     user_id = int(callback.data.split(":")[1])
     
-    session = booking_browser_sessions.get(user_id)
-    if session:
-        session["status"] = "stopped"
-        try:
-            await session["browser"].close_browser()
-        except:
-            pass
-        del booking_browser_sessions[user_id]
+    if user_id in monitoring_sessions:
+        monitoring_sessions[user_id]["status"] = "stopped"
+        del monitoring_sessions[user_id]
+        await browser_manager.close_browser(user_id)
         
         await callback.message.edit_text(
             "⏹ <b>Автобронирование остановлено</b>\n\n"
@@ -787,8 +980,9 @@ async def monitor_supply_directly(callback: CallbackQuery, state: FSMContext):
     
     supply_name = selected_supply.get("name", f"Поставка #{supply_id}")
     
-    # Получаем API ключи пользователя
-    api_keys = user_api_keys.get(user_id, [])
+    # Получаем API ключи пользователя из PostgreSQL
+    from .callbacks import get_user_api_keys_list
+    api_keys = await get_user_api_keys_list(user_id)
     if not api_keys:
         await callback.answer("❌ API ключ не найден", show_alert=True)
         return
@@ -971,8 +1165,9 @@ async def monitoring_task(user_id: int, bot):
     
     try:
         while session.get("status") == "active":
-            # Получаем API ключ пользователя  
-            api_keys = user_api_keys.get(user_id, [])
+            # Получаем API ключ пользователя из PostgreSQL
+            from .callbacks import get_user_api_keys_list
+            api_keys = await get_user_api_keys_list(user_id)
             if not api_keys:
                 break
             
@@ -1136,3 +1331,205 @@ async def show_monitoring_status(callback: CallbackQuery):
         )
     else:
         await callback.answer("❌ Активный мониторинг не найден", show_alert=True)
+
+
+@router.message(BookingStates.waiting_for_phone)
+async def process_phone_for_booking(message: Message, state: FSMContext):
+    """Обработка номера телефона для бронирования."""
+    logger.info(f"🔍 BOOKING: Processing phone from user {message.from_user.id}: {message.text}")
+    user_id = message.from_user.id
+    phone = message.text.strip()
+    
+    if phone.startswith('/'):
+        return
+    
+    if not phone.startswith("+") or len(phone) < 10:
+        await message.answer(
+            "❌ Неверный формат номера.\n"
+            "Введите в международном формате: +79991234567 или +996500441234"
+        )
+        return
+    
+    browser = await browser_manager.get_browser(user_id)
+    if not browser:
+        await message.answer("❌ Сессия браузера потеряна. Начните заново.")
+        await state.clear()
+        return
+    
+    data = await state.get_data()
+    supply_name = data.get("supply_name", "Поставка")
+    
+    loading_msg = await message.answer(
+        f"⏳ Ввожу номер в форму WB для поставки {supply_name}..."
+    )
+    
+    try:
+        success = await browser.login_step1_phone(phone)
+        
+        if success:
+            await loading_msg.edit_text(
+                f"✅ <b>Номер введен в форму WB!</b>\n\n"
+                f"📦 <b>{supply_name}</b>\n"
+                f"📱 Номер: {phone[:4]}****{phone[-2:]}\n"
+                f"📨 СМС код отправлен на ваш телефон\n\n"
+                f"🔑 Введите полученный код:"
+            )
+            
+            await state.update_data(phone=phone)
+            await state.set_state(BookingStates.waiting_for_sms_code)
+        else:
+            await loading_msg.edit_text(
+                f"❌ <b>Ошибка ввода номера</b>\n\n"
+                f"📦 <b>{supply_name}</b>\n"
+                f"Не удалось ввести номер в форму WB.\n"
+                f"Попробуйте еще раз или обратитесь к администратору.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"browser_book_supply:{data.get('supply_id')}")],
+                    [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_supply")]
+                ])
+            )
+            await state.clear()
+        
+    except Exception as e:
+        logger.error(f"Error during phone input for booking: {e}")
+        await loading_msg.edit_text(
+            f"❌ Ошибка при входе для поставки {supply_name}.\n"
+            f"Попробуйте еще раз.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"browser_book_supply:{data.get('supply_id')}")],
+                [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_supply")]
+            ])
+        )
+
+
+@router.message(BookingStates.waiting_for_sms_code)
+async def process_sms_code_for_booking(message: Message, state: FSMContext):
+    """Обработка СМС кода для бронирования."""
+    user_id = message.from_user.id
+    code = message.text.strip()
+    
+    if code.startswith('/'):
+        return
+    
+    browser = await browser_manager.get_browser(user_id)
+    if not browser:
+        await message.answer("❌ Сессия браузера потеряна.")
+        await state.clear()
+        return
+    
+    data = await state.get_data()
+    supply_name = data.get("supply_name", "Поставка")
+    supply_id = data.get("supply_id")
+    preorder_id = data.get("preorder_id")
+    
+    if not code.isdigit() or len(code) < 4 or len(code) > 6:
+        await message.answer(
+            "❌ Неверный формат кода.\n"
+            "Введите 4-6 цифр из СМС."
+        )
+        return
+    
+    loading_msg = await message.answer(
+        f"🔐 Ввожу СМС код в форму WB для поставки {supply_name}...\n"
+        f"⏳ Проверяю вход..."
+    )
+    
+    try:
+        result = await browser.login_step2_sms(code)
+        
+        if result == "email_required":
+            await loading_msg.edit_text(
+                f"📧 <b>Требуется подтверждение по email</b>\n\n"
+                f"📦 <b>{supply_name}</b>\n"
+                f"WB требует дополнительное подтверждение через электронную почту.\n\n"
+                f"📋 <b>Что делать:</b>\n"
+                f"1️⃣ Проверьте свою электронную почту\n"
+                f"2️⃣ Найдите письмо от Wildberries\n"
+                f"3️⃣ Перейдите по ссылке в письме\n"
+                f"4️⃣ После подтверждения попробуйте снова\n\n"
+                f"⚠️ Без подтверждения email авторизация невозможна.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"browser_book_supply:{supply_id}")],
+                    [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_supply")]
+                ])
+            )
+            await state.clear()
+        elif result:
+            await loading_msg.edit_text(
+                f"✅ <b>Вход выполнен успешно!</b>\n\n"
+                f"📦 <b>{supply_name}</b>\n"
+                f"🎯 Переходим к бронированию поставки...",
+                parse_mode="HTML"
+            )
+            
+            try:
+                await browser.navigate_to_supplies_page()
+                await asyncio.sleep(2)
+                
+                booking_result = await browser.book_supply_by_id(preorder_id, min_hours_ahead=80)
+                
+                if booking_result and booking_result.get("success"):
+                    await loading_msg.edit_text(
+                        f"🎉 <b>Поставка успешно забронирована!</b>\n\n"
+                        f"📦 <b>{supply_name}</b>\n"
+                        f"🆔 ID: <code>{supply_id}</code>\n"
+                        f"📋 Заказ: <code>{preorder_id}</code>\n"
+                        f"📅 Дата: {booking_result.get('date', 'Не указана')}\n"
+                        f"🏬 Склад: {booking_result.get('warehouse', 'Не указан')}\n\n"
+                        f"✅ Бронирование завершено!",
+                        parse_mode="HTML",
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text="📦 Мои поставки", callback_data="view_supplies")],
+                            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")]
+                        ])
+                    )
+                else:
+                    error_msg = booking_result.get("error", "Неизвестная ошибка") if booking_result else "Ошибка бронирования"
+                    await loading_msg.edit_text(
+                        f"❌ <b>Ошибка бронирования</b>\n\n"
+                        f"📦 <b>{supply_name}</b>\n"
+                        f"💥 {error_msg}",
+                        parse_mode="HTML",
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"browser_book_supply:{supply_id}")],
+                            [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_supply")]
+                        ])
+                    )
+                    
+            except Exception as e:
+                logger.error(f"Error during booking after login: {e}")
+                await loading_msg.edit_text(
+                    f"❌ <b>Ошибка бронирования</b>\n\n"
+                    f"📦 <b>{supply_name}</b>\n"
+                    f"💥 Произошла ошибка: <code>{str(e)}</code>",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"browser_book_supply:{supply_id}")],
+                        [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_supply")]
+                    ])
+                )
+            
+            await state.clear()
+        else:
+            await loading_msg.edit_text(
+                f"❌ <b>Ошибка входа</b>\n\n"
+                f"📦 <b>{supply_name}</b>\n"
+                f"Неверный SMS код или ошибка авторизации.\n"
+                f"Попробуйте еще раз.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"browser_book_supply:{supply_id}")],
+                    [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_supply")]
+                ])
+            )
+            await state.clear()
+        
+    except Exception as e:
+        logger.error(f"Error during SMS input for booking: {e}")
+        await loading_msg.edit_text(
+            f"❌ Ошибка при вводе SMS кода для поставки {supply_name}.\n"
+            f"Попробуйте еще раз.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"browser_book_supply:{supply_id}")],
+                [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_supply")]
+            ])
+        )

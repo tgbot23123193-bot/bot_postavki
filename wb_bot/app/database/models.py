@@ -11,7 +11,8 @@ from enum import Enum as PyEnum
 
 from sqlalchemy import (
     BigInteger, Boolean, Column, DateTime, Date, Integer, String, 
-    ForeignKey, Float, Text, Index, CheckConstraint, UniqueConstraint
+    ForeignKey, Float, Text, Index, CheckConstraint, UniqueConstraint,
+    Enum as SQLEnum
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -70,9 +71,9 @@ class User(Base):
     # User preferences for monitoring
     default_check_interval: int = Column(Integer, default=30, nullable=False)
     default_max_coefficient: float = Column(Float, default=2.0, nullable=False)
-    default_supply_type: str = Column(String(20), default=SupplyType.BOX.value, nullable=False)
-    default_delivery_type: str = Column(String(20), default=DeliveryType.DIRECT.value, nullable=False)
-    default_monitoring_mode: str = Column(String(20), default=MonitoringMode.NOTIFICATION.value, nullable=False)
+    default_supply_type: str = Column(SQLEnum(SupplyType, name='supply_type_enum'), default=SupplyType.BOX, nullable=False)
+    default_delivery_type: str = Column(SQLEnum(DeliveryType, name='delivery_type_enum'), default=DeliveryType.DIRECT, nullable=False)
+    default_monitoring_mode: str = Column(SQLEnum(MonitoringMode, name='monitoring_mode_enum'), default=MonitoringMode.NOTIFICATION, nullable=False)
     
     # Timestamps
     created_at: datetime = Column(DateTime, default=func.now(), nullable=False, index=True)
@@ -91,6 +92,12 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
         order_by="MonitoringTask.created_at.desc()"
+    )
+    browser_sessions: List["BrowserSession"] = relationship(
+        "BrowserSession",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        order_by="BrowserSession.created_at.desc()"
     )
     
     # Constraints
@@ -126,7 +133,7 @@ class APIKey(Base):
     user_id: int = Column(BigInteger, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
     
     # Encrypted API key data
-    encrypted_key: str = Column(String(500), nullable=False)
+    encrypted_key: str = Column(String(1000), nullable=False)
     salt: str = Column(String(100), nullable=False)  # Unique salt for each key
     
     # Key metadata
@@ -203,9 +210,9 @@ class MonitoringTask(Base):
     # Monitoring settings
     check_interval: int = Column(Integer, default=30, nullable=False)  # seconds
     max_coefficient: float = Column(Float, default=2.0, nullable=False)
-    supply_type: str = Column(String(20), default=SupplyType.BOX.value, nullable=False)
-    delivery_type: str = Column(String(20), default=DeliveryType.DIRECT.value, nullable=False)
-    monitoring_mode: str = Column(String(20), default=MonitoringMode.NOTIFICATION.value, nullable=False)
+    supply_type: str = Column(SQLEnum(SupplyType, name='supply_type_enum'), default=SupplyType.BOX, nullable=False)
+    delivery_type: str = Column(SQLEnum(DeliveryType, name='delivery_type_enum'), default=DeliveryType.DIRECT, nullable=False)
+    monitoring_mode: str = Column(SQLEnum(MonitoringMode, name='monitoring_mode_enum'), default=MonitoringMode.NOTIFICATION, nullable=False)
     
     # Status and control
     is_active: bool = Column(Boolean, default=True, nullable=False, index=True)
@@ -284,7 +291,7 @@ class BookingResult(Base):
     wb_response: Optional[str] = Column(Text, nullable=True)  # JSON response from WB
     
     # Status and error handling
-    status: str = Column(String(50), default=BookingStatus.PENDING.value, nullable=False, index=True)
+    status: str = Column(SQLEnum(BookingStatus, name='booking_status_enum'), default=BookingStatus.PENDING, nullable=False, index=True)
     error_message: Optional[str] = Column(Text, nullable=True)
     retry_count: int = Column(Integer, default=0, nullable=False)
     
@@ -314,11 +321,11 @@ class BookingResult(Base):
     
     def is_successful(self) -> bool:
         """Check if booking was successful."""
-        return self.status == BookingStatus.CONFIRMED.value
+        return self.status == BookingStatus.CONFIRMED
     
     def is_pending(self) -> bool:
         """Check if booking is still pending."""
-        return self.status == BookingStatus.PENDING.value
+        return self.status == BookingStatus.PENDING
 
 
 # Create indexes for optimal query performance
@@ -348,3 +355,67 @@ def create_additional_indexes():
     )
     
     return [user_active_tasks, booking_task_status, apikey_user_valid]
+
+
+class BrowserSession(Base):
+    """Модель для сохранения данных браузерных сессий пользователей."""
+    __tablename__ = 'browser_sessions'
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(BigInteger, ForeignKey('users.id'), nullable=False, index=True)
+    
+    # Данные для проверки авторизации
+    phone_number = Column(String(20), nullable=True)  # Номер телефона для которого была авторизация
+    session_valid = Column(Boolean, default=True, nullable=False)  # Валидна ли сессия
+    last_login_check = Column(DateTime(timezone=True), nullable=True)  # Последняя проверка авторизации
+    
+    # Метаданные сессии
+    user_data_dir = Column(String(500), nullable=True)  # Путь к папке с данными браузера
+    cookies_file = Column(String(500), nullable=True)  # Путь к файлу с куками
+    
+    # Информация об авторизации
+    wb_login_success = Column(Boolean, default=False)  # Успешная авторизация в WB
+    last_successful_login = Column(DateTime(timezone=True), nullable=True)  # Время последнего успешного входа
+    login_attempts = Column(Integer, default=0)  # Количество попыток входа
+    
+    # Технические данные
+    browser_fingerprint = Column(String(100), nullable=True)  # Отпечаток браузера для уникальности
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    
+    # Связи
+    user = relationship("User", back_populates="browser_sessions")
+    
+    def __repr__(self):
+        return f"<BrowserSession(user_id={self.user_id}, phone={self.phone_number}, valid={self.session_valid})>"
+    
+    def is_session_expired(self, hours: int = 24) -> bool:
+        """Проверяет истекла ли сессия (по умолчанию 24 часа)."""
+        if not self.last_login_check:
+            return True
+        
+        from datetime import timedelta, timezone
+        expiry_time = self.last_login_check + timedelta(hours=hours)
+        current_time = datetime.now(timezone.utc)
+        return current_time > expiry_time
+    
+    def mark_login_success(self, phone: str = None):
+        """Отмечает успешную авторизацию."""
+        from datetime import timezone
+        current_time = datetime.now(timezone.utc)
+        self.wb_login_success = True
+        self.session_valid = True
+        self.last_successful_login = current_time
+        self.last_login_check = current_time
+        if phone:
+            self.phone_number = phone
+    
+    def mark_login_failed(self):
+        """Отмечает неудачную попытку авторизации."""
+        from datetime import timezone
+        self.login_attempts += 1
+        self.last_login_check = datetime.now(timezone.utc)
+        
+        # После 5 неудачных попыток помечаем сессию как невалидную
+        if self.login_attempts >= 5:
+            self.session_valid = False

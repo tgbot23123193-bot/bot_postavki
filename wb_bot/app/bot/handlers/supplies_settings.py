@@ -52,19 +52,16 @@ async def clear_all_sessions(callback: CallbackQuery):
     
     try:
         # Импортируем сессии из booking_management
-        from .booking_management import booking_browser_sessions, monitoring_sessions
+        from .booking_management import monitoring_sessions
+        from ...services.browser_manager import browser_manager
         
         cleared_count = 0
         
         # Останавливаем автобронирование
-        if user_id in booking_browser_sessions:
-            session = booking_browser_sessions[user_id]
-            session["status"] = "stopped"
-            try:
-                await session["browser"].close_browser()
-            except:
-                pass
-            del booking_browser_sessions[user_id]
+        if user_id in monitoring_sessions:
+            monitoring_sessions[user_id]["status"] = "stopped"
+            del monitoring_sessions[user_id]
+            await browser_manager.close_browser(user_id)
             cleared_count += 1
         
         # Останавливаем мониторинг

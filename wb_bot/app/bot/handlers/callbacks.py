@@ -12,33 +12,59 @@ from aiogram.filters import Command
 
 from ..keyboards.inline import MainMenuCallback, get_main_menu
 from ..states import APIKeyStates
+from ...services.database_service import db_service
+from ...utils.logger import get_logger
 
+logger = get_logger(__name__)
 router = Router()
 
-# In-memory хранилище API ключей (временное решение)
-user_api_keys = {}  # user_id: [list of api keys]
+# Removed in-memory storage - using PostgreSQL database only
 
 
-def has_api_keys(user_id: int) -> bool:
+async def has_api_keys(user_id: int) -> bool:
     """Проверяет, есть ли у пользователя API ключи."""
-    return user_id in user_api_keys and len(user_api_keys[user_id]) > 0
+    try:
+        api_keys = await db_service.get_user_api_keys(user_id)
+        logger.info(f"has_api_keys: Found {len(api_keys)} keys for user {user_id}")
+        return len(api_keys) > 0
+    except Exception as e:
+        logger.error(f"has_api_keys: Failed to get API keys for user {user_id}: {e}")
+        return False
 
 
-def add_api_key(user_id: int, api_key: str) -> bool:
+async def add_api_key(user_id: int, api_key: str) -> bool:
     """Добавляет API ключ пользователю."""
-    if user_id not in user_api_keys:
-        user_api_keys[user_id] = []
-    
-    if len(user_api_keys[user_id]) >= 5:
-        return False  # Лимит достигнут
-    
-    user_api_keys[user_id].append(api_key)
-    return True
+    try:
+        existing_keys = await db_service.get_user_api_keys(user_id)
+        if len(existing_keys) >= 5:
+            return False
+        
+        await db_service.add_api_key(user_id, api_key)
+        return True
+    except Exception as e:
+        logger.error(f"add_api_key: Failed to add API key for user {user_id}: {e}")
+        return False
 
 
-def get_user_keys_count(user_id: int) -> int:
+async def get_user_keys_count(user_id: int) -> int:
     """Возвращает количество API ключей пользователя."""
-    return len(user_api_keys.get(user_id, []))
+    try:
+        api_keys = await db_service.get_user_api_keys(user_id)
+        return len(api_keys)
+    except Exception as e:
+        logger.error(f"get_user_keys_count: Failed to get API keys for user {user_id}: {e}")
+        return 0
+
+
+async def get_user_api_keys_list(user_id: int) -> list:
+    """Получает список расшифрованных API ключей пользователя."""
+    try:
+        decrypted_keys = await db_service.get_decrypted_api_keys(user_id)
+        logger.info(f"get_user_api_keys_list: Found {len(decrypted_keys)} decrypted keys for user {user_id}")
+        return decrypted_keys
+    except Exception as e:
+        logger.error(f"get_user_api_keys_list: Failed to get decrypted API keys for user {user_id}: {e}")
+        return []
 
 
 def create_blocked_menu() -> InlineKeyboardMarkup:
@@ -61,7 +87,7 @@ async def show_api_keys_menu(callback: CallbackQuery):
             [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]
         ])
         
-        keys_count = get_user_keys_count(user_id)
+        keys_count = await get_user_keys_count(user_id)
         
         api_keys_text = (
             f"🔑 <b>Управление API ключами</b>\n\n"
@@ -88,7 +114,7 @@ async def show_monitoring_menu(callback: CallbackQuery):
     """Show monitoring menu - требует API ключи."""
     user_id = callback.from_user.id
     
-    if not has_api_keys(user_id):
+    if not await has_api_keys(user_id):
         await callback.message.edit_text(
             "🔒 <b>Доступ ограничен</b>\n\n"
             "❌ Для использования мониторинга необходимо добавить API ключ Wildberries.\n\n"
@@ -109,7 +135,7 @@ async def show_settings_menu(callback: CallbackQuery):
     """Show settings menu - требует API ключи."""
     user_id = callback.from_user.id
     
-    if not has_api_keys(user_id):
+    if not await has_api_keys(user_id):
         await callback.message.edit_text(
             "🔒 <b>Доступ ограничен</b>\n\n"
             "❌ Для изменения настроек необходимо добавить API ключ Wildberries.\n\n"
@@ -128,7 +154,7 @@ async def show_stats_menu(callback: CallbackQuery):
     """Show stats menu - требует API ключи."""
     user_id = callback.from_user.id
     
-    if not has_api_keys(user_id):
+    if not await has_api_keys(user_id):
         await callback.message.edit_text(
             "🔒 <b>Доступ ограничен</b>\n\n"
             "❌ Статистика доступна только после добавления API ключа.\n\n"
@@ -142,7 +168,7 @@ async def show_stats_menu(callback: CallbackQuery):
     # Импортируем данные мониторинга
     from .monitoring_simple import user_monitoring_tasks
     
-    keys_count = get_user_keys_count(user_id)
+    keys_count = await get_user_keys_count(user_id)
     monitoring_count = len(user_monitoring_tasks.get(user_id, []))
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -202,7 +228,7 @@ async def start_add_api_key(callback: CallbackQuery, state: FSMContext):
     """Начать процесс добавления API ключа."""
     user_id = callback.from_user.id
     
-    if get_user_keys_count(user_id) >= 5:
+    if await get_user_keys_count(user_id) >= 5:
         await callback.answer("❌ Достигнут лимит API ключей (максимум 5)", show_alert=True)
         return
     
@@ -260,7 +286,7 @@ async def handle_api_key_input(message: Message, state: FSMContext):
             return
         
         # Добавляем ключ БЕЗ проверки через WB API
-        if add_api_key(user_id, api_key):
+        if await add_api_key(user_id, api_key):
             await state.clear()
             
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -270,7 +296,7 @@ async def handle_api_key_input(message: Message, state: FSMContext):
             
             await message.answer(
                 f"✅ <b>API ключ успешно добавлен!</b>\n\n"
-                f"🔑 Всего ключей: {get_user_keys_count(user_id)}/5\n\n"
+                f"🔑 Всего ключей: {await get_user_keys_count(user_id)}/5\n\n"
                 f"🎉 Теперь вы можете использовать все функции бота!\n\n"
                 f"💡 <b>Совет:</b> Начните с настройки мониторинга слотов в разделе '📊 Мониторинг'.",
                 parse_mode="HTML",
@@ -282,15 +308,23 @@ async def handle_api_key_input(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "list_api_keys")
 async def list_user_api_keys(callback: CallbackQuery):
-    """Показать список API ключей пользователя."""
+    """Показать список API ключей пользователя из PostgreSQL базы данных."""
     user_id = callback.from_user.id
-    keys = user_api_keys.get(user_id, [])
+    
+    # Получаем расшифрованные API ключи из PostgreSQL базы данных
+    try:
+        logger.info(f"📋 Loading decrypted API keys from PostgreSQL for user {user_id}")
+        keys = await db_service.get_decrypted_api_keys(user_id)
+        logger.info(f"✅ Loaded {len(keys)} decrypted API keys from PostgreSQL for user {user_id}")
+    except Exception as e:
+        logger.error(f"❌ Failed to load decrypted API keys for user {user_id}: {e}")
+        keys = []
     
     if not keys:
         await callback.answer("📋 У вас пока нет API ключей", show_alert=True)
         return
     
-    keys_text = "📋 <b>Ваши API ключи:</b>\n\n"
+    keys_text = "📋 <b>Ваши API ключи (из PostgreSQL):</b>\n\n"
     for i, key in enumerate(keys, 1):
         masked_key = f"{key[:8]}...{key[-4:]}" if len(key) > 12 else f"{key[:4]}..."
         keys_text += f"{i}. <code>{masked_key}</code>\n"
@@ -338,6 +372,21 @@ async def show_api_key_help(callback: CallbackQuery):
 @router.callback_query(F.data == "back_to_main")
 async def back_to_main_menu(callback: CallbackQuery, state: FSMContext):
     """Возврат в главное меню."""
+    # Очищаем состояние при возврате в меню
+    await state.clear()
+    await callback.message.edit_text(
+        "🏠 <b>Главное меню</b>\n\n"
+        "Добро пожаловать в WB Auto-Booking Bot!\n"
+        "Выберите нужную функцию:",
+        parse_mode="HTML",
+        reply_markup=get_main_menu()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "main_menu")
+async def main_menu_handler(callback: CallbackQuery, state: FSMContext):
+    """Обработчик кнопки главного меню."""
     # Очищаем состояние при возврате в меню
     await state.clear()
     await callback.message.edit_text(

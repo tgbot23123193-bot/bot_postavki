@@ -13,7 +13,7 @@ from typing import AsyncGenerator, Optional
 from sqlalchemy.ext.asyncio import (
     AsyncSession, AsyncEngine, create_async_engine, async_sessionmaker
 )
-from sqlalchemy.pool import QueuePool, StaticPool
+from sqlalchemy.pool import QueuePool, StaticPool, AsyncAdaptedQueuePool
 from sqlalchemy.exc import SQLAlchemyError, DisconnectionError
 from sqlalchemy import text
 
@@ -53,6 +53,26 @@ class DatabaseManager:
                     "pool_pre_ping": True,
                     "connect_args": {"check_same_thread": False},
                     "future": True,
+                }
+            elif "postgresql" in self.database_url:
+                pool_class = AsyncAdaptedQueuePool
+                engine_kwargs = {
+                    "pool_size": self.settings.database.pool_size,
+                    "max_overflow": self.settings.database.max_overflow,
+                    "pool_timeout": self.settings.database.pool_timeout,
+                    "pool_recycle": self.settings.database.pool_recycle,
+                    "poolclass": pool_class,
+                    "pool_pre_ping": True,
+                    "pool_reset_on_return": 'commit',
+                    "future": True,
+                    # PostgreSQL specific settings
+                    "connect_args": {
+                        "command_timeout": 60,
+                        "server_settings": {
+                            "jit": "off",  # Disable JIT for better performance on small queries
+                            "application_name": "wb_auto_booking_bot",
+                        }
+                    }
                 }
             else:
                 pool_class = QueuePool

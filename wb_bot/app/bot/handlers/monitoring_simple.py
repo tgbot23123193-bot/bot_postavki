@@ -34,14 +34,12 @@ async def show_monitoring_options(callback: CallbackQuery):
         "🔍 <b>Мониторинг слотов</b>\n\n"
         "Выберите действие:\n\n"
         "🚀 <b>Быстрый поиск</b> - мгновенный поиск по всем складам\n"
-        "⚡ <b>Автобронирование</b> - автоматический поиск и бронирование\n"
-        "📊 <b>Мои задачи</b> - управление активными задачами"
+        "⚡ <b>Автобронирование</b> - автоматический поиск и бронирование"
     )
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🚀 Быстрый поиск", callback_data="quick_search")],
         [InlineKeyboardButton(text="⚡ Автобронирование", callback_data="auto_booking")],
-        [InlineKeyboardButton(text="📊 Мои задачи", callback_data="my_tasks")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]
     ])
     
@@ -54,10 +52,10 @@ async def quick_search_handler(callback: CallbackQuery):
     logger.info(f"🚀 БЫСТРЫЙ ПОИСК ЗАПУЩЕН для пользователя {callback.from_user.id}")
     await callback.answer()  # Отвечаем на callback сразу
     
-    from .callbacks import user_api_keys
+    from .callbacks import get_user_api_keys_list
     
     user_id = callback.from_user.id
-    api_keys = user_api_keys.get(user_id, [])
+    api_keys = await get_user_api_keys_list(user_id)
     
     logger.info(f"🔑 Найдено API ключей: {len(api_keys)}")
     

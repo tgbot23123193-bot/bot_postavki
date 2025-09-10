@@ -64,16 +64,8 @@ def get_main_menu() -> InlineKeyboardMarkup:
                 text="🔑 API ключи",
                 callback_data=MainMenuCallback(action="api_keys").pack()
             ),
-            InlineKeyboardButton(
-                text="⚙️ Настройки",
-                callback_data=MainMenuCallback(action="settings").pack()
-            )
         ],
         [
-            InlineKeyboardButton(
-                text="📈 Статистика",
-                callback_data=MainMenuCallback(action="stats").pack()
-            ),
             InlineKeyboardButton(
                 text="❓ Помощь",
                 callback_data=MainMenuCallback(action="help").pack()

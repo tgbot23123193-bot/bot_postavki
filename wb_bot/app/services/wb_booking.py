@@ -11,8 +11,7 @@ from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Глобальная переменная для хранения API ключей
-from .wb_real_api import user_api_keys
+# Используем PostgreSQL для хранения API ключей
 
 
 class WBBookingService:
@@ -125,7 +124,10 @@ class WBBookingService:
         quantity: int = 1
     ) -> Tuple[bool, str]:
         """Забронировать слот."""
-        api_keys = user_api_keys.get(user_id, [])
+        from .database_service import db_service
+        
+        # Получаем API ключи из базы данных
+        api_keys = await db_service.get_decrypted_api_keys(user_id)
         if not api_keys:
             return False, "❌ Нет API ключей"
         
@@ -165,7 +167,10 @@ class WBBookingService:
         supply_date: str
     ) -> Tuple[bool, str]:
         """Забронировать существующую поставку на конкретную дату."""
-        api_keys = user_api_keys.get(user_id, [])
+        from .database_service import db_service
+        
+        # Получаем API ключи из базы данных
+        api_keys = await db_service.get_decrypted_api_keys(user_id)
         if not api_keys:
             return False, "❌ Нет API ключей"
         

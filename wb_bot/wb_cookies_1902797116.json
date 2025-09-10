@@ -1,0 +1,12 @@
+[
+  {
+    "name": "current_feature_version",
+    "value": "f7154965-f831-425c-8d0a-b457312e2ed3",
+    "domain": "seller.wildberries.ru",
+    "path": "/",
+    "expires": 1757912598.242321,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  }
+]

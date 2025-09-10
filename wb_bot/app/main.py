@@ -63,19 +63,8 @@ class BotApplication:
             logger.info("Initializing database...")
             await init_database()
             
-            # Initialize Redis (optional)
-            logger.info("Initializing Redis...")
-            try:
-                self.redis = aioredis.from_url(
-                    self.settings.redis.url,
-                    encoding=self.settings.redis.encoding,
-                    decode_responses=self.settings.redis.decode_responses
-                )
-                await self.redis.ping()
-                logger.info("Redis connected successfully")
-            except Exception as e:
-                logger.warning(f"Redis connection failed: {e}. Using memory storage.")
-                self.redis = None
+            # Using PostgreSQL database only (no Redis)
+            self.redis = None
             
             # Initialize bot
             logger.info("Initializing bot...")

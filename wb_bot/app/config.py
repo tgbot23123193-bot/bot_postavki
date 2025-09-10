@@ -17,8 +17,8 @@ class DatabaseSettings(BaseSettings):
     """Database configuration settings."""
     
     url: str = Field(
-        default="sqlite+aiosqlite:///./wb_bot.db",
-        description="Database URL for async SQLite connection"
+        default="postgresql+asyncpg://postgres:KulZLGinDnnRgWXgAWOmagjVMLLQRmoG@gondola.proxy.rlwy.net:24819/railway",
+        description="Database URL for async PostgreSQL connection"
     )
     echo: bool = Field(default=False, description="Enable SQLAlchemy query logging")
     pool_size: int = Field(default=20, description="Connection pool size")

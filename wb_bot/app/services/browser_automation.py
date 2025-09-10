@@ -7,12 +7,14 @@
 import asyncio
 import json
 import random
+import re
 import time
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 import playwright_stealth
 from app.utils.logger import get_logger
+from app.services.database_service import db_service
 
 logger = get_logger(__name__)
 
@@ -20,15 +22,46 @@ logger = get_logger(__name__)
 class WBBrowserAutomationPro:
     """Профессиональная автоматизация браузера для WB с обходом детекции."""
     
-    def __init__(self, headless: bool = True, debug_mode: bool = False):
+    def __init__(self, headless: bool = True, debug_mode: bool = False, user_id: int = None):
         self.headless = headless
         self.debug_mode = debug_mode
+        self.user_id = user_id
         self.playwright = None
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
-        self.cookies_file = Path("wb_cookies.json")
-        self.user_data_dir = Path("wb_user_data")  # Папка для сохранения профиля браузера
+        
+        # Если указан user_id, используем персональные пути для файлов
+        if user_id:
+            self.cookies_file = Path(f"wb_cookies_{user_id}.json")
+            self.user_data_dir = Path(f"wb_user_data_{user_id}")
+        else:
+            self.cookies_file = Path("wb_cookies.json")
+            self.user_data_dir = Path("wb_user_data")
+        
+        # Коды стран для правильного парсинга номеров
+        self.country_codes = {
+            '+7': {'name': 'Россия/Казахстан', 'digits': 10},
+            '+996': {'name': 'Кыргызстан', 'digits': 9},
+            '+998': {'name': 'Узбекистан', 'digits': 9},
+            '+992': {'name': 'Таджикистан', 'digits': 9},
+            '+993': {'name': 'Туркменистан', 'digits': 8},
+            '+994': {'name': 'Азербайджан', 'digits': 9},
+            '+995': {'name': 'Грузия', 'digits': 9},
+            '+374': {'name': 'Армения', 'digits': 8},
+            '+375': {'name': 'Беларусь', 'digits': 9},
+            '+380': {'name': 'Украина', 'digits': 9},
+            '+1': {'name': 'США/Канада', 'digits': 10},
+            '+44': {'name': 'Великобритания', 'digits': 10},
+            '+49': {'name': 'Германия', 'digits': 10},
+            '+33': {'name': 'Франция', 'digits': 9},
+            '+39': {'name': 'Италия', 'digits': 10},
+            '+34': {'name': 'Испания', 'digits': 9},
+            '+86': {'name': 'Китай', 'digits': 11},
+            '+81': {'name': 'Япония', 'digits': 10},
+            '+82': {'name': 'Южная Корея', 'digits': 10},
+            '+91': {'name': 'Индия', 'digits': 10},
+        }
         
         # Настройки для обхода детекции
         self.user_agents = [
@@ -44,6 +77,137 @@ class WBBrowserAutomationPro:
             {"width": 1440, "height": 900},
             {"width": 1536, "height": 864}
         ]
+    
+    def parse_phone_number(self, phone: str) -> Tuple[str, str, str]:
+        """
+        Охуенный парсер номеров телефонов для всех стран мира!
+        
+        Принимает любой формат номера и возвращает:
+        - country_code: код страны (например, '+7', '+996')
+        - clean_number: номер без кода страны (например, '9001234567')
+        - country_name: название страны
+        
+        Примеры:
+        '+79001234567' -> ('+7', '9001234567', 'Россия/Казахстан')
+        '+996500441234' -> ('+996', '500441234', 'Кыргызстан')
+        '79001234567' -> ('+7', '9001234567', 'Россия/Казахстан')
+        '89001234567' -> ('+7', '9001234567', 'Россия/Казахстан')
+        '+1234567890' -> ('+1', '234567890', 'США/Канада')
+        """
+        
+        # Убираем все лишние символы (пробелы, тире, скобки)
+        clean_phone = re.sub(r'[\s\-\(\)]+', '', phone.strip())
+        logger.info(f"🔍 Парсинг номера: '{phone}' -> очищенный: '{clean_phone}'")
+        
+        # Если номер начинается с плюса
+        if clean_phone.startswith('+'):
+            # Ищем подходящий код страны
+            for code, info in self.country_codes.items():
+                if clean_phone.startswith(code):
+                    country_code = code
+                    clean_number = clean_phone[len(code):]
+                    country_name = info['name']
+                    
+                    logger.info(f"✅ Определена страна: {country_name} ({country_code})")
+                    logger.info(f"📱 Номер без кода: '{clean_number}'")
+                    return country_code, clean_number, country_name
+            
+            # Если код не найден в нашей базе, берем первые 1-4 цифры как код
+            match = re.match(r'\+(\d{1,4})(\d+)', clean_phone)
+            if match:
+                code_digits, number_part = match.groups()
+                country_code = f"+{code_digits}"
+                clean_number = number_part
+                country_name = f"Неизвестная страна ({country_code})"
+                
+                logger.warning(f"⚠️ Неизвестный код страны: {country_code}")
+                logger.info(f"📱 Номер без кода: '{clean_number}'")
+                return country_code, clean_number, country_name
+        
+        # Если номер без плюса, пытаемся определить по первым цифрам
+        elif clean_phone.isdigit():
+            # Россия: номера начинающиеся с 7, 8, 9
+            if clean_phone.startswith('7') and len(clean_phone) == 11:
+                country_code = '+7'
+                clean_number = clean_phone[1:]  # Убираем первую 7
+                country_name = 'Россия/Казахстан'
+                
+            elif clean_phone.startswith('8') and len(clean_phone) == 11:
+                country_code = '+7'
+                clean_number = '9' + clean_phone[2:]  # 8 заменяем на 9
+                country_name = 'Россия/Казахстан'
+                
+            elif clean_phone.startswith('9') and len(clean_phone) == 10:
+                country_code = '+7'
+                clean_number = clean_phone  # Уже без кода
+                country_name = 'Россия/Казахстан'
+                
+            # Кыргызстан: 996 + 9 цифр
+            elif clean_phone.startswith('996') and len(clean_phone) == 12:
+                country_code = '+996'
+                clean_number = clean_phone[3:]  # Убираем 996
+                country_name = 'Кыргызстан'
+                
+            # США/Канада: 1 + 10 цифр
+            elif clean_phone.startswith('1') and len(clean_phone) == 11:
+                country_code = '+1'
+                clean_number = clean_phone[1:]  # Убираем первую 1
+                country_name = 'США/Канада'
+                
+            # Другие коды стран (998, 992, 993, etc.)
+            else:
+                for code, info in self.country_codes.items():
+                    code_digits = code[1:]  # Убираем +
+                    if clean_phone.startswith(code_digits):
+                        expected_length = len(code_digits) + info['digits']
+                        if len(clean_phone) == expected_length:
+                            country_code = code
+                            clean_number = clean_phone[len(code_digits):]
+                            country_name = info['name']
+                            break
+                else:
+                    # По умолчанию считаем что это Россия
+                    country_code = '+7'
+                    clean_number = clean_phone
+                    country_name = 'Россия/Казахстан (по умолчанию)'
+                    logger.warning(f"⚠️ Не удалось определить страну для номера '{clean_phone}', считаю что это Россия")
+            
+            logger.info(f"✅ Определена страна: {country_name} ({country_code})")
+            logger.info(f"📱 Номер без кода: '{clean_number}'")
+            return country_code, clean_number, country_name
+        
+        # Если ничего не подошло, возвращаем как есть
+        logger.error(f"❌ Не удалось распарсить номер: '{phone}'")
+        return '+7', clean_phone, 'Неопределенная страна'
+    
+    async def should_skip_login(self) -> bool:
+        """Проверяет нужно ли пропустить авторизацию (если сессия валидна)."""
+        if not self.user_id:
+            return False
+        
+        try:
+            # Проверяем есть ли валидная сессия в БД
+            is_valid = await db_service.is_browser_session_valid(self.user_id)
+            
+            if is_valid:
+                logger.info(f"✅ Найдена валидная сессия для пользователя {self.user_id}")
+                # Дополнительно делаем быструю проверку браузера, если он работает
+                if self.page and not self.page.is_closed():
+                    try:
+                        await self._quick_browser_check()
+                        logger.info(f"✅ Быстрая проверка браузера выполнена для пользователя {self.user_id}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Быстрая проверка браузера не удалась: {e}, используем данные БД")
+                else:
+                    logger.info(f"✅ Браузер недоступен, используем данные БД для пользователя {self.user_id}")
+                
+                return True
+            else:
+                logger.info(f"❌ Валидная сессия не найдена для пользователя {self.user_id}")
+                return False
+        except Exception as e:
+            logger.error(f"❌ Ошибка проверки сессии: {e}")
+            return False
     
     async def start_browser(self, headless: bool = False) -> bool:
         """Запуск браузера с максимальным обходом детекции."""
@@ -169,11 +333,15 @@ class WBBrowserAutomationPro:
     async def _inject_stealth_scripts(self):
         """Инжектим дополнительные скрипты для обхода детекции."""
         stealth_scripts = [
-            # Переопределяем webdriver property
+            # Безопасно убираем webdriver property
             """
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined,
-            });
+            try {
+                if ('webdriver' in navigator) {
+                    delete navigator.webdriver;
+                }
+            } catch (e) {
+                navigator.webdriver = undefined;
+            }
             """,
             
             # Фиксим permissions
@@ -265,37 +433,103 @@ class WBBrowserAutomationPro:
         await asyncio.sleep(random.uniform(0.2, 0.5))
     
     async def check_if_logged_in(self) -> bool:
-        """Проверяет, авторизован ли пользователь в WB."""
+        """Проверяет, авторизован ли пользователь в WB и обновляет данные в БД."""
         try:
             logger.info("🔍 Проверяю авторизацию в WB...")
             
-            # Переходим на страницу поставок для проверки авторизации
-            supplies_url = "https://seller.wildberries.ru/supplies-management/all-supplies"
-            response = await self.page.goto(supplies_url, wait_until="networkidle", timeout=15000)
+            # Сначала проверяем, что браузер и страница работают
+            if not self.page or self.page.is_closed():
+                logger.error("❌ Браузер или страница закрыты")
+                return False
             
-            if response and response.status == 200:
-                current_url = self.page.url
-                logger.info(f"📍 Текущий URL: {current_url}")
-                
-                # Проверяем признаки авторизации
-                is_logged_in = any([
-                    'seller.wildberries.ru' in current_url and 'login' not in current_url,
-                    'supplies-management' in current_url,
-                    'lk-seller.wildberries.ru' in current_url
-                ])
-                
-                if is_logged_in:
-                    logger.info("✅ Пользователь уже авторизован!")
+            # ПРИОРИТЕТ 1: Проверяем валидную сессию в БД (быстрая проверка)
+            if self.user_id:
+                is_valid_session = await db_service.is_browser_session_valid(self.user_id)
+                if is_valid_session:
+                    logger.info(f"✅ Найдена валидная сессия в БД для пользователя {self.user_id}")
+                    # Дополнительно пробуем проверить через браузер (неблокирующе)
+                    try:
+                        await self._quick_browser_check()
+                    except Exception as e:
+                        logger.warning(f"⚠️ Быстрая проверка браузера не удалась: {e}")
                     return True
-                else:
-                    logger.info("❌ Пользователь не авторизован")
-                    return False
             
-            return False
+            # ПРИОРИТЕТ 2: Если сессии нет в БД, пробуем проверить через браузер
+            try:
+                # Переходим на страницу поставок для проверки авторизации
+                supplies_url = "https://seller.wildberries.ru/supplies-management/all-supplies"
+                response = await self.page.goto(supplies_url, wait_until="domcontentloaded", timeout=10000)  # Уменьшили таймаут
+                
+                if response and response.status == 200:
+                    current_url = self.page.url
+                    logger.info(f"📍 Текущий URL: {current_url}")
+                    
+                    # Проверяем признаки авторизации
+                    is_logged_in = any([
+                        'seller.wildberries.ru' in current_url and 'login' not in current_url,
+                        'supplies-management' in current_url,
+                        'lk-seller.wildberries.ru' in current_url
+                    ])
+                    
+                    # Обновляем данные в БД если указан user_id
+                    if self.user_id:
+                        if is_logged_in:
+                            await db_service.update_browser_session_login_success(self.user_id, "session_check")
+                            logger.info(f"💾 Обновлена БД: пользователь {self.user_id} авторизован")
+                        else:
+                            # Не считаем это неудачной попыткой входа, просто обновляем время проверки
+                            session_data = await db_service.get_browser_session_data(self.user_id)
+                            if session_data:
+                                logger.info(f"💾 Пользователь {self.user_id} не авторизован, но сессия существует")
+                    
+                    if is_logged_in:
+                        logger.info("✅ Пользователь уже авторизован!")
+                        return True
+                    else:
+                        logger.info("❌ Пользователь не авторизован")
+                        return False
+                else:
+                    logger.error("❌ Не удалось загрузить страницу для проверки авторизации")
+                    return False
+                    
+            except Exception as browser_error:
+                logger.warning(f"⚠️ Ошибка при проверке через браузер: {browser_error}")
+                # Если браузер не может подключиться, но есть валидная сессия в БД - считаем авторизованным
+                if self.user_id:
+                    is_valid_session = await db_service.is_browser_session_valid(self.user_id)
+                    if is_valid_session:
+                        logger.info(f"✅ Используем валидную сессию из БД для пользователя {self.user_id}")
+                        return True
+                return False
             
         except Exception as e:
             logger.warning(f"⚠️ Ошибка проверки авторизации: {e}")
+            # При ошибке проверяем БД как последний шанс
+            if self.user_id:
+                try:
+                    is_valid_session = await db_service.is_browser_session_valid(self.user_id)
+                    if is_valid_session:
+                        logger.info(f"✅ Используем валидную сессию из БД для пользователя {self.user_id}")
+                        return True
+                except:
+                    pass
             return False
+    
+    async def _quick_browser_check(self) -> None:
+        """Быстрая проверка браузера без блокировки основного процесса."""
+        try:
+            # Пробуем быстро проверить текущий URL
+            current_url = self.page.url
+            if any([
+                'seller.wildberries.ru' in current_url and 'login' not in current_url,
+                'supplies-management' in current_url,
+                'lk-seller.wildberries.ru' in current_url
+            ]):
+                logger.info("✅ Быстрая проверка: пользователь авторизован в браузере")
+            else:
+                logger.info("ℹ️ Быстрая проверка: статус авторизации неопределен")
+        except Exception as e:
+            logger.debug(f"Быстрая проверка браузера не удалась: {e}")
 
     async def login_step1_phone(self, phone: str) -> bool:
         """Шаг 1: Ввод номера телефона с максимальной человечностью."""
@@ -1092,58 +1326,133 @@ class WBBrowserAutomationPro:
                 else:
                     logger.warning("⚠️ Не найден селектор выбора страны (флажок)")
             
-            # Человеческий ввод номера
-            logger.info(f"📱 Ввожу номер телефона: {phone}")
+            # 🚀 НОВАЯ ОХУЕННАЯ ЛОГИКА ВВОДА НОМЕРА ДЛЯ ВСЕХ СТРАН МИРА! 🚀
+            logger.info(f"📱 Обрабатываю номер телефона: {phone}")
             
-            # Для киргизских номеров используем правильную стратегию ввода
-            if phone.startswith('+996'):
-                # Если Кыргызстан был выбран, вводим только цифры без кода
-                if kg_selected:
-                    logger.info("📱 Кыргызстан выбран, ввожу только цифры без кода страны...")
-                    clean_phone = phone[4:]  # Убираем +996, остается 500441234
-                    await self._human_type(phone_input, clean_phone)
-                    logger.info(f"✅ Введены цифры: {clean_phone}")
+            # Парсим номер с помощью нашего охуенного парсера
+            country_code, clean_number, country_name = self.parse_phone_number(phone)
+            logger.info(f"🌍 Страна: {country_name}")
+            logger.info(f"📱 Чистый номер для ввода: '{clean_number}'")
+            
+            # Стратегия ввода номера:
+            # 1. Сначала пробуем ввести только чистый номер (без кода страны)
+            # 2. Если не работает, пробуем полный номер
+            # 3. Если и это не работает, пробуем разные варианты
+            
+            success = False
+            
+            # Попытка 1: Вводим только чистый номер (самый надежный способ)
+            try:
+                logger.info(f"📱 Попытка 1: Ввод чистого номера '{clean_number}' без кода страны")
+                
+                # Очищаем поле
+                phone_element = await self.page.query_selector(phone_input)
+                await phone_element.click()
+                await phone_element.fill("")
+                await asyncio.sleep(0.5)
+                
+                # Вводим чистый номер
+                await self._human_type(phone_input, clean_number)
+                await asyncio.sleep(1)
+                
+                # Проверяем что получилось
+                current_value = await self.page.evaluate(f'document.querySelector(`{phone_input}`).value')
+                logger.info(f"🔍 Значение в поле: '{current_value}'")
+                
+                # Если в поле есть наш номер, считаем успешным
+                if clean_number in current_value or len(current_value) >= len(clean_number) - 1:
+                    logger.info("✅ Попытка 1 успешна! Чистый номер введен корректно")
+                    success = True
                 else:
-                    logger.info("📱 Кыргызстан не выбран, пробую разные варианты ввода...")
+                    logger.warning("⚠️ Попытка 1 не удалась, пробую другие варианты...")
                     
-                    # Попытка 1: Вводим полный номер
-                    logger.info("📱 Попытка 1: Ввод полного номера +996...")
+            except Exception as e:
+                logger.error(f"❌ Ошибка в попытке 1: {e}")
+            
+            # Попытка 2: Если первая не сработала, пробуем полный номер
+            if not success:
+                try:
+                    logger.info(f"📱 Попытка 2: Ввод полного номера '{phone}'")
+                    
+                    # Очищаем поле
+                    phone_element = await self.page.query_selector(phone_input)
+                    await phone_element.click()
+                    await phone_element.fill("")
+                    await asyncio.sleep(0.5)
+                    
+                    # Вводим полный номер
                     await self._human_type(phone_input, phone)
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(1)
                     
-                    # Проверяем что получилось в поле
-                    try:
-                        current_value = await self.page.evaluate(f'document.querySelector(`{phone_input}`).value')
-                        logger.info(f"🔍 Значение в поле после ввода: '{current_value}'")
+                    # Проверяем результат
+                    current_value = await self.page.evaluate(f'document.querySelector(`{phone_input}`).value')
+                    logger.info(f"🔍 Значение в поле: '{current_value}'")
+                    
+                    # Если WB заменил код страны на неправильный, исправляем
+                    if country_code != '+7' and ('+7' in current_value or current_value.startswith('7')):
+                        logger.warning(f"⚠️ WB заменил {country_code} на +7, исправляю...")
                         
-                        # Если WB автоматически подставил +7 вместо +996, исправляем
-                        if current_value and ('+7' in current_value or current_value.startswith('7') or '996' not in current_value):
-                            logger.warning("⚠️ WB подставил неправильный код, исправляю...")
-                            
-                            # Попытка 2: Очищаем и вводим только цифры
-                            phone_element = await self.page.query_selector(phone_input)
-                            await phone_element.click()
-                            await phone_element.fill("")  # Полная очистка
-                            await asyncio.sleep(1)
-                            
-                            # Вводим только цифры без кода страны
-                            clean_phone = phone[4:]  # Убираем +996
-                            logger.info(f"📱 Попытка 2: Ввод без кода: {clean_phone}")
-                            await self._human_type(phone_input, clean_phone)
-                            await asyncio.sleep(2)
-                            
-                            # Проверяем результат второй попытки
-                            final_value = await self.page.evaluate(f'document.querySelector(`{phone_input}`).value')
-                            logger.info(f"🔍 Финальное значение в поле: '{final_value}'")
-                        else:
-                            logger.info("✅ Номер введен правильно с первой попытки")
-                            
-                    except Exception as js_error:
-                        logger.error(f"❌ Ошибка проверки значения поля: {js_error}")
-                        # Продолжаем работу даже если проверка не удалась
+                        # Очищаем и вводим снова только цифры
+                        await phone_element.click()
+                        await phone_element.fill("")
+                        await asyncio.sleep(0.5)
+                        await self._human_type(phone_input, clean_number)
+                        await asyncio.sleep(1)
+                        
+                        final_value = await self.page.evaluate(f'document.querySelector(`{phone_input}`).value')
+                        logger.info(f"🔍 Исправленное значение: '{final_value}'")
+                        
+                    logger.info("✅ Попытка 2 выполнена")
+                    success = True
                     
+                except Exception as e:
+                    logger.error(f"❌ Ошибка в попытке 2: {e}")
+            
+            # Попытка 3: Если ничего не работает, пробуем альтернативные варианты
+            if not success:
+                logger.warning("⚠️ Стандартные попытки не сработали, пробую альтернативные варианты...")
+                
+                try:
+                    # Для российских номеров пробуем разные форматы
+                    if country_code == '+7':
+                        variants = [
+                            clean_number,  # 9001234567
+                            f"8{clean_number[1:]}",  # 89001234567 
+                            f"7{clean_number}",  # 79001234567
+                            f"+7{clean_number}"  # +79001234567
+                        ]
+                    else:
+                        variants = [
+                            clean_number,
+                            f"{country_code[1:]}{clean_number}",  # код без + и номер
+                            f"{country_code}{clean_number}"  # полный номер
+                        ]
+                    
+                    for i, variant in enumerate(variants, 3):
+                        logger.info(f"📱 Попытка {i}: Ввод варианта '{variant}'")
+                        
+                        phone_element = await self.page.query_selector(phone_input)
+                        await phone_element.click()
+                        await phone_element.fill("")
+                        await asyncio.sleep(0.5)
+                        await self._human_type(phone_input, variant)
+                        await asyncio.sleep(1)
+                        
+                        current_value = await self.page.evaluate(f'document.querySelector(`{phone_input}`).value')
+                        logger.info(f"🔍 Значение: '{current_value}'")
+                        
+                        if len(current_value) >= 10:  # Если в поле достаточно цифр
+                            logger.info(f"✅ Попытка {i} успешна!")
+                            success = True
+                            break
+                            
+                except Exception as e:
+                    logger.error(f"❌ Ошибка в альтернативных попытках: {e}")
+            
+            if success:
+                logger.info(f"🎉 НОМЕР УСПЕШНО ВВЕДЕН! Страна: {country_name}")
             else:
-                await self._human_type(phone_input, phone)
+                logger.warning("⚠️ Не удалось ввести номер идеально, но продолжаю...")
             
             # Ждем немного
             await asyncio.sleep(random.uniform(0.5, 1.0))
@@ -1323,17 +1632,46 @@ class WBBrowserAutomationPro:
                 # Получаем элемент поля
                 sms_field = await self.page.query_selector(sms_input)
                 if sms_field:
-                    # Очищаем поле
-                    await sms_field.fill("")
+                    # Кликаем на поле для фокуса
+                    await sms_field.click()
                     await asyncio.sleep(0.5)
                     
-                    # Вводим код символ за символом (как человек)
-                    logger.info(f"⌨️ Печатаю код по символам: {sms_code}")
-                    for char in sms_code:
-                        await sms_field.type(char)
-                        await asyncio.sleep(random.uniform(0.1, 0.3))  # Человеческие задержки
+                    # Полностью очищаем поле (Ctrl+A + Delete)
+                    await sms_field.press('Control+a')
+                    await asyncio.sleep(0.2)
+                    await sms_field.press('Delete')
+                    await asyncio.sleep(0.5)
                     
-                    logger.info(f"✅ SMS код введен успешно: {sms_code}")
+                    # Проверяем, что поле действительно пустое
+                    current_value = await sms_field.input_value()
+                    if current_value:
+                        logger.warning(f"⚠️ Поле не очистилось полностью, текущее значение: '{current_value}'")
+                        # Дополнительная очистка
+                        await sms_field.fill("")
+                        await asyncio.sleep(0.3)
+                    
+                    # Вводим код целиком (более надежный способ)
+                    logger.info(f"⌨️ Ввожу SMS код: {sms_code}")
+                    await sms_field.fill(sms_code)
+                    await asyncio.sleep(0.5)
+                    
+                    # Проверяем, что код введен правильно
+                    final_value = await sms_field.input_value()
+                    if final_value == sms_code:
+                        logger.info(f"✅ SMS код введен правильно: {sms_code}")
+                    else:
+                        logger.warning(f"⚠️ Код введен неправильно! Ожидался: '{sms_code}', получен: '{final_value}'")
+                        # Пробуем еще раз через type
+                        await sms_field.fill("")
+                        await asyncio.sleep(0.3)
+                        for char in sms_code:
+                            await sms_field.type(char)
+                            await asyncio.sleep(random.uniform(0.1, 0.2))
+                        
+                        # Финальная проверка
+                        final_value = await sms_field.input_value()
+                        logger.info(f"🔄 После повторного ввода: '{final_value}'")
+                    
                 else:
                     logger.error("❌ Не удалось получить элемент поля SMS")
                     return False
@@ -1385,8 +1723,19 @@ class WBBrowserAutomationPro:
                 logger.info("⌨️ Нажимаю Enter для подтверждения")
                 await self.page.keyboard.press('Enter')
             
-            # Ждем перенаправления
+            # Ждем перенаправления или проверки email
             await asyncio.sleep(random.uniform(3, 5))
+            
+            # Проверяем, не требуется ли подтверждение по email
+            current_url = self.page.url
+            logger.info(f"🔍 Текущий URL после SMS: {current_url}")
+            
+            # Проверяем наличие email подтверждения
+            email_verification_detected = await self._check_email_verification()
+            if email_verification_detected:
+                logger.warning("📧 Обнаружено требование подтверждения по email!")
+                # Возвращаем специальный код для обработки email
+                return "email_required"
             
             # Проверяем успешный вход
             current_url = self.page.url
@@ -1400,6 +1749,11 @@ class WBBrowserAutomationPro:
             if login_success:
                 logger.info("🎉 Успешный вход в WB!")
                 await self._save_cookies()
+                
+                # Обновляем данные в БД о успешном входе
+                if self.user_id:
+                    await db_service.update_browser_session_login_success(self.user_id, sms_code[:4] if sms_code else "unknown")
+                    logger.info(f"💾 Обновлена БД: успешный вход пользователя {self.user_id}")
                 
                 # Переходим на страницу управления поставками
                 supplies_url = "https://seller.wildberries.ru/supplies-management/all-supplies"
@@ -1425,6 +1779,79 @@ class WBBrowserAutomationPro:
                 
         except Exception as e:
             logger.error(f"❌ Ошибка ввода SMS кода: {e}")
+            
+            # Обновляем БД о неудачной попытке входа
+            if self.user_id:
+                await db_service.update_browser_session_login_failed(self.user_id)
+                logger.info(f"💾 Обновлена БД: неудачная попытка входа пользователя {self.user_id}")
+            
+            return False
+    
+    async def _check_email_verification(self) -> bool:
+        """Проверяет, требуется ли подтверждение по email."""
+        try:
+            logger.info("📧 Проверяю наличие email верификации...")
+            
+            # Селекторы для проверки email верификации
+            email_selectors = [
+                # Тексты, указывающие на необходимость email подтверждения
+                'text="Подтвердите адрес электронной почты"',
+                'text="Проверьте электронную почту"',
+                'text="На вашу почту отправлено письмо"',
+                'text="Подтверждение по электронной почте"',
+                
+                # Поля для ввода email кода
+                'input[placeholder*="код" i][placeholder*="почт" i]',
+                'input[placeholder*="email" i][placeholder*="код" i]',
+                'input[name*="email" i][name*="code" i]',
+                
+                # Кнопки связанные с email
+                'button:has-text("Отправить код на почту")',
+                'button:has-text("Подтвердить email")',
+                
+                # Общие селекторы
+                '[data-testid*="email"]',
+                '.email-verification',
+                '#email-verification'
+            ]
+            
+            for selector in email_selectors:
+                try:
+                    element = await self.page.query_selector(selector)
+                    if element and await element.is_visible():
+                        logger.warning(f"📧 Найден элемент email верификации: {selector}")
+                        return True
+                except:
+                    continue
+            
+            # Проверяем URL на наличие email-related параметров
+            current_url = self.page.url
+            email_url_indicators = ['email', 'verification', 'confirm', 'check-email']
+            for indicator in email_url_indicators:
+                if indicator in current_url.lower():
+                    logger.warning(f"📧 URL указывает на email верификацию: {current_url}")
+                    return True
+            
+            # Проверяем текст на странице
+            page_content = await self.page.content()
+            email_text_indicators = [
+                'проверьте электронную почту',
+                'подтвердите адрес электронной почты',
+                'на вашу почту отправлено',
+                'email verification',
+                'check your email'
+            ]
+            
+            for indicator in email_text_indicators:
+                if indicator.lower() in page_content.lower():
+                    logger.warning(f"📧 Найден текст email верификации: {indicator}")
+                    return True
+            
+            logger.info("✅ Email верификация не требуется")
+            return False
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка проверки email верификации: {e}")
             return False
     
     async def navigate_to_supplies(self) -> bool:
@@ -1585,6 +2012,1332 @@ class WBBrowserAutomationPro:
         except Exception as e:
             logger.error(f"❌ Ошибка создания скриншота: {e}")
             return False
+    
+    async def book_supply_by_id(self, supply_id: str, preorder_id: str = None, min_hours_ahead: int = 80) -> Dict[str, Any]:
+        """
+        ОХУЕННОЕ бронирование поставки по ID через прямую ссылку.
+        
+        Args:
+            supply_id: ID поставки для бронирования
+            preorder_id: ID предзаказа (опционально)
+            min_hours_ahead: минимальное количество часов вперед для бронирования (по умолчанию 80)
+        
+        Returns:
+            Dict с результатом бронирования
+        """
+        result = {
+            "success": False,
+            "message": "",
+            "booked_date": None,
+            "supply_id": supply_id,
+            "attempts": 0
+        }
+        
+        try:
+            logger.info(f"🚀 НАЧИНАЮ ОХУЕННОЕ БРОНИРОВАНИЕ! Supply ID: {supply_id}, Preorder ID: {preorder_id}")
+            
+            # Шаг 1: Проверяем авторизацию через сессию
+            if self.user_id and await self.should_skip_login():
+                logger.info("✅ Сессия валидна, пропускаю вход")
+            else:
+                # Если не авторизованы - возвращаем ошибку (логин должен быть выполнен заранее)
+                if not await self.check_if_logged_in():
+                    result["message"] = "❌ Не авторизован! Сначала выполните вход в систему"
+                    return result
+            
+            # Шаг 2: Формируем URL и переходим напрямую к поставке
+            # Для незабронированных поставок используем supplyId в параметре preorderId
+            supply_url = f"https://seller.wildberries.ru/supplies-management/all-supplies/supply-detail?preorderId={supply_id}&supplyId"
+            
+            logger.info(f"🔗 Перехожу по прямой ссылке: {supply_url}")
+            
+            response = await self.page.goto(supply_url, wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(3)  # Даем странице полностью загрузиться
+            
+            if not response or response.status != 200:
+                result["message"] = f"❌ Не удалось открыть страницу поставки (статус: {response.status if response else 'нет ответа'})"
+                return result
+            
+            logger.info("✅ Страница поставки загружена")
+            
+            # Блокируем аналитику и детекцию автоматизации WB
+            await self.page.evaluate("""
+                // Блокируем WB аналитический SDK
+                if (window.wba) {
+                    window.wba = function() { return false; };
+                }
+                
+                // Блокируем отправку аналитических данных
+                if (window.navigator && window.navigator.sendBeacon) {
+                    const originalSendBeacon = window.navigator.sendBeacon;
+                    window.navigator.sendBeacon = function(url, data) {
+                        if (url && (url.includes('a.wb.ru') || url.includes('wbbasket.ru'))) {
+                            return false; // Блокируем только аналитику
+                        }
+                        return originalSendBeacon.apply(this, arguments);
+                    };
+                }
+                
+                // КРИТИЧНО: Маскируем автоматизацию (максимально безопасно)
+                try {
+                    if ('webdriver' in navigator) {
+                        delete navigator.webdriver;
+                    }
+                } catch (e) {
+                    try {
+                        navigator.webdriver = undefined;
+                    } catch (e2) {
+                        // Игнорируем все ошибки webdriver - не критично
+                        console.log('Webdriver изменить не удалось, игнорируем');
+                    }
+                }
+                
+                // Убираем следы Playwright
+                delete window.chrome;
+                delete window.navigator.webdriver;
+                delete window.__playwright;
+                delete window.__pw_manual;
+                
+                // Блокируем детекцию WB
+                if (window.WB) {
+                    window.WB.isAutomation = function() { return false; };
+                    window.WB.detectBot = function() { return false; };
+                    window.WB.captcha = { show: function() {} };
+                    delete window.WB._automation_detected;
+                    delete window.WB._click_blocked;
+                }
+                
+                // НЕ БЛОКИРУЕМ addEventListener - это убивает модальные окна!
+                // Просто блокируем только beforeunload события
+                window.addEventListener('beforeunload', function(e) { e.preventDefault(); return false; }, true);
+                
+                // Блокируем XMLHttpRequest только для аналитики
+                const originalXHR = window.XMLHttpRequest;
+                window.XMLHttpRequest = function() {
+                    const xhr = new originalXHR();
+                    const originalOpen = xhr.open;
+                    xhr.open = function(method, url) {
+                        if (url && (url.includes('a.wb.ru') || url.includes('wbbasket.ru'))) {
+                            return false; // Блокируем только аналитику
+                        }
+                        return originalOpen.apply(this, arguments);
+                    };
+                    return xhr;
+                };
+                
+                // Блокируем fetch только для аналитики
+                const originalFetch = window.fetch;
+                window.fetch = function(url, options) {
+                    if (url && (url.includes('a.wb.ru') || url.includes('wbbasket.ru'))) {
+                        return Promise.resolve(new Response('{}'));
+                    }
+                    return originalFetch.apply(this, arguments);
+                };
+            """)
+            logger.info("✅ Аналитические скрипты WB заблокированы (React функциональность сохранена)")
+            
+            # Максимум 3 попытки бронирования
+            max_attempts = 3
+            
+            for attempt in range(1, max_attempts + 1):
+                result["attempts"] = attempt
+                logger.info(f"🎯 Попытка бронирования #{attempt}")
+                
+                # КРИТИЧНО: Сброс состояния страницы перед каждой попыткой
+                if attempt > 1:
+                    logger.info("🔄 Сбрасываю состояние страницы для избежания блокировок...")
+                    try:
+                        # Полная очистка состояния браузера
+                        await self.page.evaluate("""
+                            // Очищаем все переменные автоматизации (безопасно)
+                            try { delete window.webdriver; } catch(e) {}
+                            try { delete window._phantom; } catch(e) {}
+                            try { delete window.callPhantom; } catch(e) {}
+                            try { delete window.chrome; } catch(e) {}
+                            try { delete window.navigator.webdriver; } catch(e) {}
+                            try { navigator.webdriver = undefined; } catch(e) {}
+                            
+                            // НЕ ОЧИЩАЕМ event listeners - это ломает модальные окна!
+                            
+                            // Сбрасываем флаги WB
+                            if (window.WB) {
+                                delete window.WB._automation_detected;
+                                delete window.WB._bot_detected;
+                            }
+                            
+                            // Очищаем localStorage от флагов автоматизации
+                            Object.keys(localStorage).forEach(key => {
+                                if (key.includes('automation') || key.includes('bot') || key.includes('playwright')) {
+                                    localStorage.removeItem(key);
+                                }
+                            });
+                            
+                            // Сбрасываем sessionStorage
+                            Object.keys(sessionStorage).forEach(key => {
+                                if (key.includes('automation') || key.includes('bot') || key.includes('playwright')) {
+                                    sessionStorage.removeItem(key);
+                                }
+                            });
+                        """)
+                        
+                        # Перезагружаем страницу для полного сброса
+                        await self.page.reload(wait_until='domcontentloaded')
+                        await asyncio.sleep(3)
+                        
+                        # Переходим на нужную поставку заново
+                        supply_url = f"https://seller.wildberries.ru/supplies-management/all?query={supply_id}"
+                        await self.page.goto(supply_url, wait_until='domcontentloaded')
+                        await asyncio.sleep(2)
+                        
+                        logger.info("✅ Состояние страницы успешно сброшено")
+                        
+                    except Exception as reset_error:
+                        logger.warning(f"⚠️ Ошибка сброса состояния: {reset_error}")
+                
+                # Шаг 3: Ищем кнопку "Забронировать поставку"
+                book_button = None
+                button_texts = [
+                    "Запланировать поставку",  # Точный текст из HTML  
+                    "Забронировать поставку",
+                    "Забронировать",
+                    "Запланировать",
+                    "Выбрать дату",
+                    # Локализационные ключи
+                    "common-translates.planSupply",
+                    "common-translates.bookSupply",
+                    "common-translates.plan",
+                    "common-translates.book"
+                ]
+                
+                for btn_text in button_texts:
+                    try:
+                        # Ищем кнопку по тексту
+                        button_selector = f'button:has-text("{btn_text}")'
+                        book_button = self.page.locator(button_selector).first
+                        
+                        if await book_button.count() > 0 and await book_button.is_visible():
+                            logger.info(f"✅ Найдена кнопка: {btn_text}")
+                            break
+                            
+                        # Также проверяем span внутри button
+                        span_selector = f'button span:has-text("{btn_text}")'
+                        book_button = self.page.locator(span_selector).locator('..')
+                        
+                        if await book_button.count() > 0 and await book_button.is_visible():
+                            logger.info(f"✅ Найдена кнопка через span: {btn_text}")
+                            break
+                    except:
+                        continue
+                
+                # Если кнопка не найдена по тексту, ищем по селекторам классов
+                if not book_button or await book_button.count() == 0:
+                    logger.info("🔍 Ищу кнопку бронирования по селекторам классов...")
+                    class_selectors = [
+                        # ТОЧНЫЙ селектор из предоставленного HTML
+                        'span[class*="caption__kqFcIewCT5"]:has-text("Запланировать поставку")',
+                        'button:has(span[class*="caption__kqFcIewCT5"])',
+                        # Общие селекторы
+                        'button[class*="book"]',
+                        'button[class*="plan"]',
+                        'button[class*="schedule"]',
+                        'button[class*="booking"]',
+                        'button[class*="supply"]',
+                        '[data-testid*="book"]',
+                        '[data-testid*="plan"]',
+                        '[data-testid*="schedule"]',
+                        'button[class*="primary"]',
+                        'button[class*="main"]',
+                        'button[class*="action"]'
+                    ]
+                    
+                    for selector in class_selectors:
+                        try:
+                            book_button = self.page.locator(selector).first
+                            if await book_button.count() > 0 and await book_button.is_visible():
+                                logger.info(f"✅ Найдена кнопка по селектору: {selector}")
+                                break
+                        except:
+                            continue
+                
+                if not book_button or await book_button.count() == 0:
+                    logger.error("❌ Кнопка 'Забронировать поставку' не найдена")
+                    await self.take_screenshot(f"no_book_button_attempt_{attempt}.png")
+                    
+                    # Пробуем обновить страницу и повторить
+                    if attempt < max_attempts:
+                        logger.info("🔄 Обновляю страницу...")
+                        await self.page.reload(wait_until="domcontentloaded")
+                        await asyncio.sleep(3)
+                        continue
+                    else:
+                        result["message"] = "❌ Кнопка бронирования не найдена после всех попыток"
+                        return result
+                
+                # Кликаем на кнопку бронирования с эмуляцией человеческого поведения
+                try:
+                    # Добавляем случайную задержку перед кликом (как человек думает)
+                    import random
+                    human_delay = random.uniform(0.8, 2.0)
+                    await asyncio.sleep(human_delay)
+                    
+                    # Очищаем возможные блокировки WB перед кликом
+                    await self.page.evaluate("""
+                        // Убираем детекцию автоматизации (безопасно)
+                        try {
+                            if ('webdriver' in navigator) {
+                                delete navigator.webdriver;
+                            }
+                        } catch (e) {
+                            navigator.webdriver = undefined;
+                        }
+                        try { delete window.chrome; } catch (e) {}
+                        try { delete window.navigator.webdriver; } catch (e) {}
+                        
+                        // Сбрасываем флаги WB
+                        if (window.WB) {
+                            delete window.WB._click_blocked;
+                            delete window.WB._automation_flag;
+                        }
+                    """)
+                    
+                    # Сначала наводимся на кнопку (как человек)
+                    await book_button.hover()
+                    await asyncio.sleep(random.uniform(0.3, 0.7))
+                    
+                    # Прокручиваем к кнопке если нужно
+                    await book_button.scroll_into_view_if_needed()
+                    await asyncio.sleep(0.4)
+                    
+                    # Человекоподобный JavaScript клик
+                    await book_button.evaluate("""
+                        button => {
+                            // Убираем все блокировки с кнопки
+                            button.disabled = false;
+                            button.style.pointerEvents = 'auto';
+                            
+                            // Получаем координаты кнопки
+                            const rect = button.getBoundingClientRect();
+                            const x = rect.left + rect.width / 2;
+                            const y = rect.top + rect.height / 2;
+                            
+                            // Создаем человекоподобную последовательность событий с задержками
+                            setTimeout(() => {
+                                // Mouseover
+                                button.dispatchEvent(new MouseEvent('mouseover', { 
+                                    bubbles: true, clientX: x, clientY: y 
+                                }));
+                            }, 0);
+                            
+                            setTimeout(() => {
+                                // Mousedown
+                                button.dispatchEvent(new MouseEvent('mousedown', { 
+                                    bubbles: true, clientX: x, clientY: y 
+                                }));
+                            }, 50);
+                            
+                            setTimeout(() => {
+                                // Mouseup
+                                button.dispatchEvent(new MouseEvent('mouseup', { 
+                                    bubbles: true, clientX: x, clientY: y 
+                                }));
+                            }, 150);
+                            
+                            setTimeout(() => {
+                                // Click
+                                button.dispatchEvent(new MouseEvent('click', { 
+                                    bubbles: true, clientX: x, clientY: y 
+                                }));
+                                
+                                // Также обычный клик
+                                button.click();
+                            }, 200);
+                        }
+                    """)
+                    logger.info("✅ Кликнул на кнопку бронирования с эмуляцией человека")
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка человекоподобного клика: {e}")
+                    # Fallback на простой клик
+                    try:
+                        await book_button.click()
+                        logger.info("✅ Кликнул на кнопку бронирования через Playwright")
+                    except Exception as e2:
+                        logger.error(f"❌ Ошибка клика на кнопку: {e2}")
+                        if attempt < max_attempts:
+                            continue
+                        else:
+                            # Очищаем HTML теги из ошибки
+                            import html
+                            clean_error = html.escape(str(e2))
+                            result["message"] = f"❌ Ошибка клика на кнопку: {clean_error}"
+                            return result
+                
+                # Ждем загрузки JavaScript и появления popup
+                await asyncio.sleep(5)  # Увеличиваем время ожидания для React приложения
+                
+                # Ждем загрузки React приложения (не используем networkidle для SPA)
+                try:
+                    # Ждем появления React root элемента
+                    await self.page.wait_for_selector('#root', timeout=15000)
+                    logger.info("✅ React приложение загружено")
+                    
+                    # Ждем загрузки React компонентов
+                    await asyncio.sleep(3)
+                    
+                    # Проверяем, что страница полностью загружена
+                    await self.page.wait_for_function("document.readyState === 'complete'", timeout=10000)
+                    logger.info("✅ Страница полностью загружена")
+                    
+                    # Дополнительная блокировка аналитики после клика (только для предотвращения перехвата)
+                    await self.page.evaluate("""
+                        // Дополнительно блокируем WB аналитический SDK если он загрузился после клика
+                        if (window.wba) {
+                            window.wba = function() { return false; };
+                        }
+                    """)
+                    logger.info("✅ Дополнительная блокировка аналитики применена")
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ React приложение не загрузилось полностью: {e}, продолжаю...")
+                
+                # Ждем появления popup окна с календарем (React Portal)
+                calendar_appeared = False
+                calendar_selectors = [
+                    '[id*="Portal-CalendarPlanModal"]',
+                    '[class*="Portal-CalendarPlanModal"]',
+                    '[class*="Calendar"]',
+                    '[class*="calendar"]',
+                    '[class*="date-picker"]',
+                    '[class*="modal"]',
+                    '[role="dialog"]',
+                    '.date-selection',
+                    '[data-testid="date-selector"]',
+                    '#portal [class*="modal"]',
+                    '#portal [class*="Calendar"]'
+                ]
+                
+                # Ждем появления popup с увеличенным таймаутом для React
+                for selector in calendar_selectors:
+                    try:
+                        await self.page.wait_for_selector(selector, timeout=12000)
+                        calendar_appeared = True
+                        logger.info(f"✅ Popup с календарем появился: {selector}")
+                        break
+                    except:
+                        continue
+                
+                # Дополнительная проверка - ждем появления элементов внутри popup
+                if not calendar_appeared:
+                    # Пробуем найти любые модальные окна в portal
+                    try:
+                        portal_element = self.page.locator('#portal')
+                        if await portal_element.count() > 0:
+                            # Ищем любые модальные окна в portal
+                            modal_in_portal = portal_element.locator('[class*="modal"], [class*="Modal"], [role="dialog"]')
+                            if await modal_in_portal.count() > 0:
+                                calendar_appeared = True
+                                logger.info("✅ Найдено модальное окно в portal")
+                    except:
+                        pass
+                
+                # Дополнительная проверка - ждем появления элементов внутри popup
+                if calendar_appeared:
+                    # Ждем появления элементов календаря внутри popup
+                    calendar_elements_selectors = [
+                        '[data-testid*="calendar-cell"]',
+                        '[class*="Calendar-cell"]',
+                        'button[class*="Calendar-cell"]',
+                        'div[class*="calendar-cell"]'
+                    ]
+                    
+                    for selector in calendar_elements_selectors:
+                        try:
+                            await self.page.wait_for_selector(selector, timeout=5000)
+                            logger.info(f"✅ Элементы календаря загружены: {selector}")
+                            break
+                        except:
+                            continue
+                
+                if not calendar_appeared:
+                    logger.warning("⚠️ Календарь не появился, но продолжаю искать даты...")
+                
+                # Шаг 4: Ищем доступные даты в popup окне
+                await asyncio.sleep(3)  # Даем больше времени на загрузку дат в popup
+                
+                # Ищем доступные даты для бронирования
+                date_found = False
+                selected_date = None
+                
+                # Селекторы для поиска доступных дат в календаре WB
+                date_selectors = [
+                    # ТОЧНЫЙ селектор из предоставленного HTML
+                    'div[class*="Calendar-cell__date-container"][data-testid*="calendar-cell-date"]',
+                    '[data-testid*="calendar-cell-date"]:not([class*="disabled"])',
+                    # Оригинальные селекторы
+                    '[data-testid*="calendar-cell"]:not([class*="disabled"])',
+                    '[data-testid*="calendar-cell-amount"]',
+                    'div[class*="Calendar-cell"]:not([class*="disabled"])',
+                    'button[class*="Calendar-cell"]:not([disabled])',
+                    'div[class*="calendar-cell"]:not([class*="disabled"])',
+                    'button[class*="available"]:not([disabled])',
+                    'div[class*="available"]:not([class*="disabled"])',
+                    'td[class*="available"]:not([class*="disabled"])',
+                    '[data-available="true"]',
+                    '.date-item:not(.disabled)',
+                    'button.date:not([disabled])',
+                    # Новые селекторы для ячеек календаря
+                    'div[class*="calendar"] div:not([class*="disabled"])',
+                    'div[class*="Calendar"] div:not([class*="disabled"])',
+                    '[role="gridcell"]:not([class*="disabled"])',
+                    '[role="button"]:not([disabled])'
+                ]
+                
+                for selector in date_selectors:
+                    try:
+                        available_dates = self.page.locator(selector)
+                        count = await available_dates.count()
+                        
+                        if count > 0:
+                            logger.info(f"✅ Найдено {count} доступных дат через селектор: {selector}")
+                            
+                            # Выбираем дату с учетом min_hours_ahead
+                            from datetime import datetime, timedelta
+                            import locale
+                            
+                            # Устанавливаем русскую локаль для парсинга дат
+                            try:
+                                locale.setlocale(locale.LC_TIME, 'ru_RU.UTF-8')
+                            except:
+                                try:
+                                    locale.setlocale(locale.LC_TIME, 'Russian_Russia.1251')
+                                except:
+                                    pass
+                            
+                            min_date = datetime.now() + timedelta(hours=min_hours_ahead)
+                            logger.info(f"🕒 Минимальная дата для бронирования: {min_date.strftime('%d %B, %a')}")
+                            
+                            # Берем первую подходящую дату (НЕ раньше min_date)
+                            suitable_date_found = False
+                            for i in range(count):
+                                date_element = available_dates.nth(i)
+                                
+                                # Пробуем получить дату из атрибутов
+                                date_text = None
+                                for attr in ['data-date', 'data-value', 'aria-label', 'title']:
+                                    try:
+                                        date_text = await date_element.get_attribute(attr)
+                                        if date_text:
+                                            break
+                                    except:
+                                        continue
+                                
+                                # Если не нашли в атрибутах, берем текст
+                                if not date_text:
+                                    date_text = await date_element.text_content()
+                                
+                                logger.info(f"📅 Проверяю дату: {date_text}")
+                                
+                                # КРИТИЧНО: парсим дату и проверяем что она НЕ СЕГОДНЯ!
+                                if date_text:
+                                    try:
+                                        import re
+                                        # Очищаем текст от лишнего мусора (логистика, хранение и т.д.)
+                                        clean_date_text = re.sub(r'(Приёмка|Бесплатно|Логистика|Хранение|Отмена|\d+%)', '', date_text)
+                                        
+                                        # Ищем паттерн "число месяц"
+                                        date_match = re.search(r'(\d{1,2})\s+(\w+)', clean_date_text)
+                                        if date_match:
+                                            day = int(date_match.group(1))
+                                            month_name = date_match.group(2)
+                                            
+                                            # Словарь месяцев
+                                            months = {
+                                                'января': 1, 'февраля': 2, 'марта': 3, 'апреля': 4,
+                                                'мая': 5, 'июня': 6, 'июля': 7, 'августа': 8,
+                                                'сентября': 9, 'октября': 10, 'ноября': 11, 'декабря': 12
+                                            }
+                                            
+                                            if month_name in months:
+                                                month = months[month_name]
+                                                current_year = datetime.now().year
+                                                
+                                                # Создаем дату
+                                                parsed_date = datetime(current_year, month, day)
+                                                
+                                                # Если дата в прошлом, берем следующий год
+                                                if parsed_date < datetime.now():
+                                                    parsed_date = datetime(current_year + 1, month, day)
+                                                
+                                                logger.info(f"🔍 Распарсенная дата: {parsed_date}, минимальная: {min_date}")
+                                                
+                                                # ВАЖНО: проверяем что дата НЕ СЕГОДНЯ и НЕ ЗАВТРА!
+                                                now = datetime.now()
+                                                today = datetime(now.year, now.month, now.day)
+                                                tomorrow = today + timedelta(days=1)
+                                                
+                                                # КРИТИЧНО: НЕ ВЫБИРАЕМ СЕГОДНЯШНЕЕ ЧИСЛО (10) даже в следующем году!
+                                                if parsed_date.day == now.day and parsed_date.month == now.month:
+                                                    logger.info(f"❌ Дата {clean_date_text} - то же число что и сегодня ({now.day}.{now.month}), ПРОПУСКАЕМ!")
+                                                    continue
+                                                
+                                                if parsed_date <= tomorrow:
+                                                    logger.info(f"❌ Дата {clean_date_text} слишком близко - это сегодня или завтра, ПРОПУСКАЕМ!")
+                                                    continue
+                                                
+                                                # Проверяем что дата подходит (не раньше min_date)
+                                                if parsed_date >= min_date:
+                                                    hours_diff = (parsed_date - datetime.now()).total_seconds() / 3600
+                                                    logger.info(f"✅ Дата {clean_date_text} подходит (через {hours_diff:.1f} часов)")
+                                                    suitable_date_found = True
+                                                else:
+                                                    hours_diff = (parsed_date - datetime.now()).total_seconds() / 3600
+                                                    logger.info(f"❌ Дата {clean_date_text} слишком ранняя (через {hours_diff:.1f} часов, нужно минимум {min_hours_ahead})")
+                                                    continue
+                                    except Exception as e:
+                                        logger.warning(f"⚠️ Ошибка парсинга даты '{date_text}': {e}")
+                                        # НЕ принимаем дату если не можем распарсить!
+                                        continue
+                                
+                                if not suitable_date_found:
+                                    logger.info(f"❌ Дата {date_text} не подходит, ищу следующую...")
+                                    continue
+                                
+                                # КРИТИЧЕСКИ ВАЖНО: кнопка появляется только при hover на дату!
+                                logger.info(f"🖱️ Навожу мышь на дату: {date_text}")
+                                await date_element.hover()
+                                await asyncio.sleep(1.5)  # Увеличиваем время ожидания появления кнопки
+                                
+                                # Ждем появления кнопки "Выбрать" с несколькими попытками
+                                select_button = None
+                                select_selectors = [
+                                    # ТОЧНЫЕ селекторы из обновленного HTML кода
+                                    'button[class*="button__QmJ2ep+bvz"][class*="s_vFIVMtH331"][data-testid*="calendar-cell-choose-date-1-2-button-secondary"]',
+                                    'button[data-testid="calendar-cell-choose-date-1-2-button-secondary"]',
+                                    'button[class*="button__QmJ2ep+bvz"]:has-text("Выбрать")',
+                                    'button[class*="s_vFIVMtH331"]:has-text("Выбрать")',
+                                    'span[class*="caption__hRApPYLnnH"][data-testid="text"]:has-text("Выбрать")',
+                                    # Общие селекторы
+                                    '[data-testid*="calendar-cell-choose-date"]',
+                                    'button[data-testid*="choose-date"]', 
+                                    'button:has-text("Выбрать")',
+                                    'button:has-text("выбрать")',
+                                    # Селекторы по классам из HTML
+                                    'button[class*="button__QmJ2ep"]',
+                                    'button[class*="s_vFIVMtH331"]',
+                                    # Fallback селекторы
+                                    'button:has-text("common-translates.choose")',
+                                    'div[class*="calendar"] button:visible',
+                                    'div[class*="Calendar"] button:visible',
+                                    '[role="gridcell"] button:visible',
+                                    '[data-testid*="select"]',
+                                    'button[type="button"]:visible'
+                                ]
+                                
+                                # Ждем появления кнопки с множественными попытками hover
+                                for attempt in range(6):  # Больше попыток
+                                    # Повторяем hover каждую попытку - кнопка может исчезнуть
+                                    await date_element.hover()
+                                    await asyncio.sleep(0.8)  # Время для появления кнопки
+                                    
+                                    # Проверяем все селекторы
+                                    for sel in select_selectors:
+                                        try:
+                                            buttons = self.page.locator(sel)
+                                            button_count = await buttons.count()
+                                            
+                                            for i in range(button_count):
+                                                btn = buttons.nth(i)
+                                                if await btn.is_visible():
+                                                    # Дополнительная проверка текста
+                                                    try:
+                                                        btn_text = await btn.text_content()
+                                                        if btn_text and any(word in btn_text.lower() for word in 
+                                                                          ['выбрать', 'choose', 'common-translates.choose']):
+                                                            select_button = btn
+                                                            logger.info(f"✅ Кнопка найдена через {attempt + 1} попытку: {sel}, текст: '{btn_text}'")
+                                                            break
+                                                    except:
+                                                        # Если не можем получить текст, берем кнопку
+                                                        select_button = btn
+                                                        logger.info(f"✅ Кнопка найдена через {attempt + 1} попытку: {sel}")
+                                                        break
+                                        except Exception as e:
+                                            continue
+                                    
+                                    if select_button:
+                                        break
+                                        
+                                    logger.info(f"⏳ Попытка {attempt + 1}/6: кнопка не найдена, повторяю hover...")
+                                
+                                # Если стандартные селекторы не сработали, используем DOM анализ
+                                if not select_button:
+                                    logger.info("🔍 Анализирую DOM структуру после hover...")
+                                    
+                                    # Еще один hover для активации
+                                    await date_element.hover()
+                                    await asyncio.sleep(1.0)
+                                    
+                                    # Ищем все кнопки, которые появились после hover
+                                    dom_analysis = await self.page.evaluate("""
+                                        () => {
+                                            const results = [];
+                                            
+                                            // Ищем все кнопки на странице
+                                            const allButtons = document.querySelectorAll('button, [role="button"]');
+                                            
+                                            allButtons.forEach((btn, index) => {
+                                                const rect = btn.getBoundingClientRect();
+                                                const isVisible = rect.width > 0 && rect.height > 0 && 
+                                                                btn.offsetParent !== null;
+                                                
+                                                if (isVisible) {
+                                                    const text = btn.textContent || btn.innerText || '';
+                                                    const classes = btn.className || '';
+                                                    const testId = btn.getAttribute('data-testid') || '';
+                                                    
+                                                    // Проверяем если это кнопка "Выбрать"
+                                                    if (text.includes('Выбрать') || 
+                                                        text.includes('common-translates.choose') ||
+                                                        text.includes('choose') ||
+                                                        testId.includes('choose') ||
+                                                        testId.includes('select')) {
+                                                        
+                                                        results.push({
+                                                            index: index,
+                                                            text: text,
+                                                            classes: classes,
+                                                            testId: testId,
+                                                            html: btn.outerHTML.substring(0, 200),
+                                                            position: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+                                                        });
+                                                    }
+                                                }
+                                            });
+                                            
+                                            return results;
+                                        }
+                                    """)
+                                    
+                                    if dom_analysis:
+                                        logger.info(f"🎯 DOM анализ нашел {len(dom_analysis)} подходящих кнопок:")
+                                        for i, btn_info in enumerate(dom_analysis):
+                                            logger.info(f"  Кнопка {i+1}: '{btn_info.get('text', '')}' (testId: {btn_info.get('testId', '')})")
+                                        
+                                        # Берем первую найденную кнопку
+                                        first_btn = dom_analysis[0]
+                                        if 'common-translates.choose' in first_btn.get('text', '') or first_btn.get('testId', ''):
+                                            select_button = self.page.locator('button').nth(first_btn['index'])
+                                            logger.info("✅ Выбрана кнопка через DOM анализ")
+                                    
+                                    # Альтернативный поиск по координатам мыши
+                                    try:
+                                        # Получаем координаты мыши
+                                        mouse_pos = await self.page.evaluate("() => ({ x: window.mouseX || 0, y: window.mouseY || 0 })")
+                                        
+                                        # Ищем элемент под курсором мыши
+                                        element_at_mouse = await self.page.evaluate(f"""
+                                            () => {{
+                                                const element = document.elementFromPoint({mouse_pos.get('x', 0)}, {mouse_pos.get('y', 0)});
+                                                if (element && (element.tagName === 'BUTTON' || element.textContent?.includes('Выбрать') || element.textContent?.includes('common-translates.choose'))) {{
+                                                    return element.outerHTML;
+                                                }}
+                                                return null;
+                                            }}
+                                        """)
+                                        
+                                        if element_at_mouse:
+                                            logger.info("✅ Найдена кнопка под курсором мыши")
+                                            select_button = self.page.locator('button').filter(has_text="Выбрать").first
+                                            break
+                                    except:
+                                        continue
+                                
+                                # Если кнопка не найдена, пробуем найти по другим признакам
+                                if not select_button or await select_button.count() == 0:
+                                    logger.info("🔍 Ищу кнопку 'Выбрать' по другим признакам...")
+                                    
+                                    # Ищем в popup окне
+                                    try:
+                                        popup_buttons = self.page.locator('#portal button, [id*="Portal"] button, [class*="modal"] button')
+                                        button_count = await popup_buttons.count()
+                                        logger.info(f"🔍 Найдено {button_count} кнопок в popup")
+                                        
+                                        for i in range(button_count):
+                                            btn = popup_buttons.nth(i)
+                                            try:
+                                                btn_text = await btn.text_content()
+                                                if btn_text and ("выбрать" in btn_text.lower() or "выбор" in btn_text.lower() or
+                                                                "common-translates.choose" in btn_text or "common-translates.modalCancelButton" in btn_text):
+                                                    select_button = btn
+                                                    logger.info(f"✅ Найдена кнопка по тексту: {btn_text}")
+                                                    break
+                                            except:
+                                                continue
+                                        
+                                        # Если не найдено, ищем по локализационным ключам
+                                        if not select_button or await select_button.count() == 0:
+                                            logger.info("🔍 Ищу по локализационным ключам...")
+                                            for key in ["common-translates.choose", "common-translates.modalCancelButton"]:
+                                                try:
+                                                    key_button = self.page.locator(f'button:has-text("{key}")')
+                                                    if await key_button.count() > 0:
+                                                        select_button = key_button.first
+                                                        logger.info(f"✅ Найдена кнопка по ключу: {key}")
+                                                        break
+                                                except:
+                                                    continue
+                                    except Exception as e:
+                                        logger.warning(f"⚠️ Ошибка fallback поиска: {e}")
+                                    
+                                    # Ищем любые кнопки в popup окне
+                                    popup_buttons = self.page.locator('[id*="Portal-CalendarPlanModal"] button, [class*="Portal-CalendarPlanModal"] button')
+                                    button_count = await popup_buttons.count()
+                                    
+                                    for i in range(button_count):
+                                        try:
+                                            btn = popup_buttons.nth(i)
+                                            btn_text = await btn.text_content()
+                                            if btn_text and ("выбрать" in btn_text.lower() or "выбор" in btn_text.lower() or 
+                                                           "common-translates.choose" in btn_text or "common-translates.modalCancelButton" in btn_text):
+                                                select_button = btn
+                                                logger.info(f"✅ Найдена кнопка по тексту: {btn_text}")
+                                                break
+                                        except:
+                                            continue
+                                
+                                # Если кнопка "Выбрать" появилась - кликаем через JavaScript
+                                if select_button and await select_button.count() > 0:
+                                    try:
+                                        # ОСТОРОЖНО: убираем ТОЛЬКО мешающие элементы, НЕ ЛОМАЯ модальное окно
+                                        await self.page.evaluate("""
+                                            // НЕ ТРОГАЕМ calendar-header-container - он нужен для работы модального окна!
+                                            
+                                            // Убираем только внешние overlay элементы (НЕ внутри модального окна)
+                                            const overlayElements = document.querySelectorAll('[data-name="Overlay"]:not([id*="Portal"] [data-name="Overlay"])');
+                                            overlayElements.forEach(overlay => {
+                                                const rect = overlay.getBoundingClientRect();
+                                                // Убираем только большие оверлеи (полноэкранные)
+                                                if (rect.width > window.innerWidth * 0.8 && rect.height > window.innerHeight * 0.8) {
+                                                    overlay.style.pointerEvents = 'none';
+                                                    overlay.style.zIndex = '-1';
+                                                }
+                                            });
+                                            
+                                            // НЕ УБИРАЕМ [role="presentation"] - это часть модального окна!
+                                            
+                                            // НЕ УБИРАЕМ модальные окна - они нужны для работы!
+                                            
+                                            // НЕ БЛОКИРУЕМ addEventListener - это убивает модальное окно!
+                                        """)
+                                        
+                                        # Ждем немного
+                                        await asyncio.sleep(0.5)
+                                        
+                                        # МЯГКИЙ клик на кнопку "Выбрать" - НЕ ЛОМАЕМ модальное окно!
+                                        try:
+                                            # Просто обычный клик - НЕ ИСПОЛЬЗУЕМ агрессивный JavaScript!
+                                            await select_button.click()
+                                            logger.info("✅ Кликнул на 'Выбрать' обычным способом")
+                                        except Exception as click_error:
+                                            logger.warning(f"⚠️ Обычный клик не сработал: {click_error}")
+                                            # Только если обычный клик не работает - используем мягкий JavaScript
+                                            await select_button.evaluate("""
+                                                button => {
+                                                    // НЕ КЛОНИРУЕМ кнопку - это может сломать модальное окно!
+                                                    // Просто кликаем аккуратно
+                                                    const event = new MouseEvent('click', {
+                                                        view: window,
+                                                        bubbles: true,
+                                                        cancelable: true
+                                                    });
+                                                    button.dispatchEvent(event);
+                                                    button.click();
+                                                }
+                                            """)
+                                            logger.info("✅ Кликнул на 'Выбрать' через мягкий JavaScript")
+                                    except Exception as click_error:
+                                        logger.warning(f"⚠️ Ошибка JavaScript клика на 'Выбрать': {click_error}")
+                                        # Fallback на обычный клик
+                                        try:
+                                            await select_button.click()
+                                            logger.info("✅ Кликнул на 'Выбрать' через Playwright")
+                                        except Exception as click_error2:
+                                            logger.warning(f"⚠️ Ошибка клика на 'Выбрать': {click_error2}")
+                                            # Пробуем кликнуть на дату
+                                            await date_element.evaluate("element => element.click()")
+                                            logger.info("✅ Кликнул на дату вместо 'Выбрать'")
+                                else:
+                                    # Иначе кликаем на саму дату
+                                    await date_element.click()
+                                    logger.info("✅ Кликнул на дату")
+                                
+                                # КРИТИЧНО: Проверяем, что модальное окно не закрылось!
+                                await asyncio.sleep(2)
+                                popup_still_open = await self.page.locator('[class*="calendar"], [id*="Portal"]').count()
+                                if popup_still_open == 0:
+                                    logger.error("❌ ДЕРЬМО! Модальное окно закрылось после клика!")
+                                    if attempt < max_attempts:
+                                        logger.info("🔄 Перезагружаю страницу и пробую снова...")
+                                        await self.page.reload(wait_until='domcontentloaded')
+                                        await asyncio.sleep(3)
+                                        continue
+                                    else:
+                                        result["message"] = "❌ Модальное окно закрывается после клика - нужно исправить код"
+                                        return result
+                                else:
+                                    logger.info("✅ Модальное окно все еще открыто")
+                                
+                                date_found = True
+                                selected_date = date_text
+                                await asyncio.sleep(2)  # Ждем активации кнопки "Забронировать"
+                                
+                                # Ищем кнопку "Забронировать" которая должна появиться после выбора даты
+                                final_book_button = None
+                                final_book_selectors = [
+                                    'button:has-text("Забронировать")',
+                                    'button:has-text("Забронировать поставку")',
+                                    'button:has-text("Подтвердить")',
+                                    'button:has-text("Готово")',
+                                    'button[class*="book"]',
+                                    'button[class*="confirm"]'
+                                ]
+                                
+                                for sel in final_book_selectors:
+                                    try:
+                                        final_book_button = self.page.locator(sel).first
+                                        if await final_book_button.count() > 0 and await final_book_button.is_visible():
+                                            logger.info(f"✅ Найдена финальная кнопка бронирования: {sel}")
+                                            break
+                                    except:
+                                        continue
+                                
+                                if final_book_button and await final_book_button.count() > 0:
+                                    try:
+                                        await final_book_button.click()
+                                        logger.info("✅ Кликнул на финальную кнопку бронирования")
+                                    except Exception as e:
+                                        logger.warning(f"⚠️ Ошибка клика на финальную кнопку: {e}")
+                                
+                                break
+                            
+                            if date_found:
+                                break
+                    except Exception as e:
+                        logger.debug(f"Ошибка с селектором {selector}: {e}")
+                        continue
+                
+                if not date_found:
+                    logger.error("❌ Не найдено доступных дат для бронирования")
+                    await self.take_screenshot(f"no_dates_attempt_{attempt}.png")
+                    
+                    if attempt < max_attempts:
+                        # Закрываем модальное окно и пробуем снова
+                        try:
+                            close_button = self.page.locator('button[class*="close"], [aria-label*="close"], .modal-close').first
+                            if await close_button.count() > 0:
+                                await close_button.click()
+                                await asyncio.sleep(2)
+                        except:
+                            pass
+                        continue
+                    else:
+                        result["message"] = "❌ Нет доступных дат для бронирования"
+                        return result
+                
+                # Шаг 5: Ждем появления кнопки "Запланировать" после клика на "Выбрать"
+                logger.info("⏳ Жду появления кнопки 'Запланировать' после выбора даты...")
+                await asyncio.sleep(3)  # Больше времени для загрузки интерфейса
+                
+                confirm_button = None
+                confirm_texts = [
+                    "Запланировать",  # Точный текст из HTML
+                    "Забронировать",
+                    "Подтвердить",
+                    "Сохранить",
+                    "OK",
+                    "Готово"
+                ]
+                
+                # ВАЖНО: ищем кнопку ТОЛЬКО внутри модального окна!
+                modal_locators = [
+                    '[class*="calendar"]',
+                    '[id*="Portal"]', 
+                    '[role="dialog"]',
+                    '[class*="Modal"]',
+                    '[data-testid*="modal"]'
+                ]
+                
+                modal_found = None
+                for modal_selector in modal_locators:
+                    try:
+                        modal_elements = self.page.locator(modal_selector)
+                        if await modal_elements.count() > 0:
+                            modal_found = modal_elements.first
+                            logger.info(f"✅ Найдено модальное окно для поиска кнопки: {modal_selector}")
+                            break
+                    except:
+                        continue
+                
+                if modal_found:
+                    # ДЕБАГ: логируем HTML структуру модального окна
+                    try:
+                        modal_html = await modal_found.inner_html()
+                        logger.info(f"📄 HTML модального окна (первые 500 символов): {modal_html[:500]}...")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Не удалось получить HTML модального окна: {e}")
+                    
+                    # Ищем кнопку ВНУТРИ модального окна
+                    for btn_text in confirm_texts:
+                        try:
+                            # Ищем кнопку ВНУТРИ модального окна
+                            button_selector = f'button:has-text("{btn_text}"):not([disabled])'
+                            confirm_button = modal_found.locator(button_selector).first
+                            
+                            if await confirm_button.count() > 0 and await confirm_button.is_visible():
+                                logger.info(f"✅ Найдена кнопка подтверждения ВНУТРИ модального окна: {btn_text}")
+                                break
+                        except Exception as e:
+                            logger.warning(f"⚠️ Ошибка поиска кнопки {btn_text} в модальном окне: {e}")
+                            continue
+                else:
+                    logger.warning("⚠️ Модальное окно не найдено, ищу кнопку по всей странице...")
+                    # Fallback: ищем по всей странице
+                    for btn_text in confirm_texts:
+                        try:
+                            # Проверяем что кнопка активна
+                            button_selector = f'button:has-text("{btn_text}"):not([disabled])'
+                            confirm_button = self.page.locator(button_selector).first
+                            
+                            if await confirm_button.count() > 0 and await confirm_button.is_visible():
+                                logger.info(f"✅ Найдена активная кнопка подтверждения: {btn_text}")
+                                break
+                        except:
+                            continue
+                
+                # Если не найдена по тексту, ищем по точному селектору из HTML ВНУТРИ модального окна
+                if not confirm_button or await confirm_button.count() == 0:
+                    logger.info("🔍 Ищу кнопку 'Запланировать' по точным селекторам ВНУТРИ модального окна...")
+                    
+                    # ТОЧНЫЕ селекторы из твоего HTML кода
+                    confirm_selectors = [
+                        'span[class*="caption__0iy-jJu+aV"]:has-text("Запланировать")',  # Точный класс
+                        'button:has(span[class*="caption__0iy-jJu+aV"])',  # Кнопка с этим span
+                        'span.caption__0iy-jJu+aV',  # Прямой класс
+                        'button span:has-text("Запланировать")',  # Любой span с текстом
+                        'button:has-text("Запланировать")',  # Кнопка с текстом
+                        '[class*="caption__0iy-jJu+aV"]',  # По классу
+                    ]
+                    
+                    # Если есть модальное окно - ищем внутри него
+                    search_context = modal_found if modal_found else self.page
+                    context_name = "модального окна" if modal_found else "всей страницы"
+                    
+                    for selector in confirm_selectors:
+                        try:
+                            button_elements = search_context.locator(selector)
+                            button_count = await button_elements.count()
+                            
+                            if button_count > 0:
+                                for i in range(button_count):
+                                    btn = button_elements.nth(i)
+                                    if await btn.is_visible():
+                                        # Проверяем текст
+                                        btn_text = await btn.text_content()
+                                        if btn_text and "запланировать" in btn_text.lower():
+                                            confirm_button = btn
+                                            logger.info(f"✅ Найдена кнопка 'Запланировать' по селектору ВНУТРИ {context_name}: {selector}, текст: '{btn_text}'")
+                                            break
+                            
+                            if confirm_button and await confirm_button.count() > 0:
+                                break
+                                
+                        except Exception as e:
+                            logger.warning(f"⚠️ Ошибка поиска по селектору {selector} внутри {context_name}: {e}")
+                            continue
+
+                # ПОСЛЕДНЯЯ ПОПЫТКА: ищем ЛЮБУЮ кнопку в модальном окне
+                if not confirm_button or await confirm_button.count() == 0:
+                    logger.warning("⚠️ Кнопка не найдена по стандартным селекторам, ищу ЛЮБЫЕ кнопки в модальном окне...")
+                    
+                    if modal_found:
+                        try:
+                            # Ищем ВСЕ кнопки в модальном окне
+                            all_buttons = modal_found.locator('button')
+                            button_count = await all_buttons.count()
+                            
+                            logger.info(f"🔍 Найдено {button_count} кнопок в модальном окне")
+                            
+                            for i in range(button_count):
+                                btn = all_buttons.nth(i)
+                                if await btn.is_visible() and await btn.is_enabled():
+                                    # Получаем текст кнопки
+                                    btn_text = await btn.text_content()
+                                    
+                                    # КРИТИЧНО: Если текст кнопки пустой, ищем в дочерних span элементах!
+                                    if not btn_text or btn_text.strip() == '':
+                                        try:
+                                            # Ищем span внутри кнопки
+                                            span_elements = btn.locator('span')
+                                            span_count = await span_elements.count()
+                                            
+                                            span_texts = []
+                                            for j in range(span_count):
+                                                span_text = await span_elements.nth(j).text_content()
+                                                if span_text and span_text.strip():
+                                                    span_texts.append(span_text.strip())
+                                            
+                                            btn_text = ' '.join(span_texts) if span_texts else ''
+                                            
+                                        except Exception as e:
+                                            logger.warning(f"⚠️ Ошибка чтения span в кнопке {i}: {e}")
+                                    
+                                    logger.info(f"🔎 Кнопка {i}: '{btn_text}'")
+                                    
+                                    # Проверяем по ключевым словам
+                                    if btn_text and any(keyword in btn_text.lower() for keyword in 
+                                        ["запланировать", "подтвердить", "забронировать", "готово", "ok", "сохранить", "далее"]):
+                                        confirm_button = btn
+                                        logger.info(f"✅ НАЙДЕНА подходящая кнопка: '{btn_text}'")
+                                        break
+                        except Exception as e:
+                            logger.error(f"❌ Ошибка поиска всех кнопок: {e}")
+                
+                # ДОПОЛНИТЕЛЬНЫЙ ПОИСК: ищем по data-testid и классам
+                if not confirm_button or await confirm_button.count() == 0:
+                    logger.warning("⚠️ Ищу по альтернативным селекторам...")
+                    
+                    alternative_selectors = [
+                        # По data-testid
+                        '[data-testid*="button"]',
+                        '[data-testid*="confirm"]', 
+                        '[data-testid*="submit"]',
+                        # По классам из твоего HTML
+                        '[class*="caption__0iy-jJu+aV"]',
+                        '[class*="button__"]',
+                        # По типу
+                        'button[type="submit"]',
+                        'input[type="submit"]',
+                        # По роли
+                        '[role="button"]'
+                    ]
+                    
+                    search_context = modal_found if modal_found else self.page
+                    
+                    for selector in alternative_selectors:
+                        try:
+                            elements = search_context.locator(selector)
+                            count = await elements.count()
+                            
+                            if count > 0:
+                                logger.info(f"🔍 Найдено {count} элементов по селектору: {selector}")
+                                
+                                for i in range(count):
+                                    elem = elements.nth(i)
+                                    if await elem.is_visible():
+                                        elem_text = await elem.text_content()
+                                        logger.info(f"🔎 Элемент {i} ({selector}): '{elem_text}'")
+                                        
+                                        if elem_text and any(keyword in elem_text.lower() for keyword in 
+                                            ["запланировать", "подтвердить", "забронировать"]):
+                                            confirm_button = elem
+                                            logger.info(f"✅ НАЙДЕН элемент через альтернативный селектор: '{elem_text}'")
+                                            break
+                            
+                            if confirm_button and await confirm_button.count() > 0:
+                                break
+                                
+                        except Exception as e:
+                            logger.warning(f"⚠️ Ошибка поиска по селектору {selector}: {e}")
+                            continue
+                
+                # КРИТИЧНЫЙ ДЕБАГ: если всё ещё не найдена, ищем ПО ВСЕЙ СТРАНИЦЕ
+                if not confirm_button or await confirm_button.count() == 0:
+                    logger.error("❌ КНОПКА НЕ НАЙДЕНА В МОДАЛЬНОМ ОКНЕ! Ищу по всей странице...")
+                    
+                    try:
+                        # Ищем ВСЕ элементы с текстом "Запланировать" на странице
+                        all_page_elements = self.page.locator('*:has-text("Запланировать")')
+                        page_count = await all_page_elements.count()
+                        
+                        logger.info(f"🔍 Найдено {page_count} элементов с текстом 'Запланировать' на всей странице")
+                        
+                        for i in range(min(page_count, 10)):  # Максимум 10 элементов
+                            elem = all_page_elements.nth(i)
+                            if await elem.is_visible():
+                                elem_text = await elem.text_content()
+                                elem_tag = await elem.evaluate('el => el.tagName')
+                                elem_class = await elem.get_attribute('class') or ''
+                                elem_id = await elem.get_attribute('id') or ''
+                                elem_testid = await elem.get_attribute('data-testid') or ''
+                                
+                                logger.info(f"🔎 Элемент {i}: <{elem_tag}> '{elem_text}' class='{elem_class}' id='{elem_id}' testid='{elem_testid}'")
+                                
+                                # Если это кнопка или кликабельный элемент
+                                if elem_tag.lower() in ['button', 'input'] or 'button' in elem_class.lower():
+                                    if "запланировать" in elem_text.lower():
+                                        confirm_button = elem
+                                        logger.info(f"✅ НАЙДЕНА кнопка ПО ВСЕЙ СТРАНИЦЕ: <{elem_tag}> '{elem_text}'")
+                                        break
+                        
+                        # Также ищем по твоему точному классу по всей странице
+                        if not confirm_button or await confirm_button.count() == 0:
+                            exact_class_buttons = self.page.locator('span[class*="caption__0iy-jJu+aV"]')
+                            exact_count = await exact_class_buttons.count()
+                            
+                            logger.info(f"🔍 Найдено {exact_count} элементов с точным классом caption__0iy-jJu+aV")
+                            
+                            for i in range(exact_count):
+                                span = exact_class_buttons.nth(i)
+                                if await span.is_visible():
+                                    span_text = await span.text_content()
+                                    logger.info(f"🔎 Span {i}: '{span_text}'")
+                                    
+                                    if span_text and "запланировать" in span_text.lower():
+                                        # Ищем родительскую кнопку
+                                        parent_button = span.locator('xpath=ancestor::button[1]')
+                                        if await parent_button.count() > 0:
+                                            confirm_button = parent_button.first
+                                            logger.info(f"✅ НАЙДЕНА кнопка через span с точным классом: '{span_text}'")
+                                            break
+                    
+                    except Exception as e:
+                        logger.error(f"❌ Ошибка поиска по всей странице: {e}")
+                
+                if not confirm_button or await confirm_button.count() == 0:
+                    logger.error("❌ Кнопка подтверждения не найдена НИГДЕ на странице!")
+                    await self.take_screenshot(f"no_confirm_button_attempt_{attempt}.png")
+                    
+                    if attempt < max_attempts:
+                        continue
+                    else:
+                        result["message"] = "❌ Кнопка подтверждения бронирования не найдена"
+                        return result
+                
+                # МЯГКИЙ клик на кнопку подтверждения - НЕ ЛОМАЕМ интерфейс!
+                try:
+                    # НЕ УБИРАЕМ элементы модального окна - они нужны для его работы!
+                    
+                    # Просто обычный клик
+                    await confirm_button.click()
+                    logger.info("✅ Нажал кнопку подтверждения обычным способом")
+                
+                except Exception as click_error:
+                    logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА при бронировании: {click_error}")
+                    await self.take_screenshot(f"booking_error_{supply_id}.png")
+                    if attempt < max_attempts:
+                        continue
+                    else:
+                        # Очищаем HTML теги из ошибки
+                        import html
+                        clean_error = html.escape(str(click_error))
+                        result["message"] = f"❌ Ошибка клика на кнопку подтверждения: {clean_error}"
+                        return result
+                
+                await asyncio.sleep(3)
+                
+                # Шаг 6: Проверяем результат бронирования
+                success = False
+                error_message = None
+                
+                # Проверяем уведомления об успехе
+                success_selectors = [
+                    'text=/успешно забронирована/i',
+                    'text=/бронирование выполнено/i',
+                    'text=/поставка забронирована/i',
+                    'text=/successfully booked/i',
+                    '[class*="success"]',
+                    '[class*="notification"][class*="success"]',
+                    '.toast-success',
+                    '[role="alert"][class*="success"]'
+                ]
+                
+                for selector in success_selectors:
+                    try:
+                        success_element = self.page.locator(selector).first
+                        if await success_element.count() > 0:
+                            success = True
+                            logger.info(f"✅ Найдено уведомление об успехе: {selector}")
+                            break
+                    except:
+                        continue
+                
+                # Проверяем ошибки
+                if not success:
+                    error_selectors = [
+                        '[class*="error"]',
+                        '[class*="alert"][class*="danger"]',
+                        '.toast-error',
+                        '[role="alert"][class*="error"]',
+                        'text=/ошибка/i',
+                        'text=/не удалось/i',
+                        'text=/failed/i'
+                    ]
+                    
+                    for selector in error_selectors:
+                        try:
+                            error_element = self.page.locator(selector).first
+                            if await error_element.count() > 0:
+                                error_message = await error_element.text_content()
+                                logger.error(f"❌ Найдена ошибка: {error_message}")
+                                break
+                        except:
+                            continue
+                
+                if success:
+                    result["success"] = True
+                    result["message"] = f"✅ Поставка {supply_id} успешно забронирована на {selected_date}!"
+                    result["booked_date"] = selected_date
+                    logger.info(result["message"])
+                    
+                    # Делаем скриншот успешного бронирования
+                    await self.take_screenshot(f"booking_success_{supply_id}.png")
+                    return result
+                    
+                elif error_message:
+                    logger.warning(f"⚠️ Попытка #{attempt}: WB выдал ошибку: {error_message}")
+                    
+                    if attempt < max_attempts:
+                        result["message"] = f"Попытка бронирования #{attempt} не удалась, WB выдал ошибку. Пробую еще раз..."
+                        await asyncio.sleep(3)
+                        continue
+                    else:
+                        # Очищаем HTML теги из ошибки
+                        import html
+                        clean_error = html.escape(str(error_message)) if error_message else "неизвестная ошибка"
+                        result["message"] = f"❌ Бронирование не удалось после {max_attempts} попыток. Последняя ошибка: {clean_error}"
+                        return result
+                else:
+                    # Не нашли ни успеха, ни ошибки - проверяем по изменению страницы
+                    current_url = self.page.url
+                    if "success" in current_url or "confirmed" in current_url:
+                        result["success"] = True
+                        result["message"] = f"✅ Поставка {supply_id} забронирована (определено по URL)!"
+                        result["booked_date"] = selected_date
+                        return result
+                    
+                    if attempt < max_attempts:
+                        logger.warning(f"⚠️ Попытка #{attempt}: результат неясен, пробую еще раз")
+                        await asyncio.sleep(3)
+                        continue
+            
+            # Если дошли сюда - все попытки исчерпаны
+            result["message"] = f"❌ Не удалось забронировать поставку после {max_attempts} попыток"
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА при бронировании: {e}")
+            # Очищаем HTML теги из ошибки для безопасной передачи в Telegram
+            import html
+            clean_error = html.escape(str(e))
+            result["message"] = f"❌ Ошибка: {clean_error}"
+            
+            # Делаем скриншот для отладки
+            try:
+                await self.take_screenshot(f"booking_error_{supply_id}.png")
+            except:
+                pass
+            
+            return result
 
     async def navigate_to_supplies_page(self) -> bool:
         """Переходит на страницу управления поставками."""
@@ -1777,3 +3530,98 @@ class WBBrowserAutomationPro:
         except Exception as e:
             logger.error(f"❌ Ошибка при бронировании поставки: {e}")
             return False
+
+    async def find_available_slots(self) -> List[Dict]:
+        """Найти доступные слоты для бронирования."""
+        try:
+            logger.info("🔍 Ищу доступные слоты...")
+            
+            # Переходим на страницу планирования
+            await self.page.goto("https://seller.wildberries.ru/supplies/planning", wait_until="networkidle")
+            await asyncio.sleep(3)
+            
+            # Ищем таблицу со слотами
+            slots = []
+            
+            # Ищем элементы слотов (примерные селекторы)
+            slot_elements = await self.page.query_selector_all('[data-testid*="slot"], .slot-item, .date-slot')
+            
+            for element in slot_elements:
+                try:
+                    # Извлекаем данные слота
+                    date_text = await element.inner_text()
+                    if date_text and "x" in date_text:
+                        # Парсим дату и коэффициент
+                        parts = date_text.split()
+                        date = parts[0] if parts else "Неизвестно"
+                        coef_text = [p for p in parts if "x" in p]
+                        coefficient = coef_text[0].replace("x", "") if coef_text else "1"
+                        
+                        slots.append({
+                            "date": date,
+                            "coefficient": int(coefficient) if coefficient.isdigit() else 1,
+                            "available": True
+                        })
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка парсинга слота: {e}")
+                    continue
+            
+            logger.info(f"✅ Найдено слотов: {len(slots)}")
+            return slots
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка поиска слотов: {e}")
+            return []
+
+    async def get_my_supplies(self) -> List[Dict]:
+        """Получить список моих поставок."""
+        try:
+            logger.info("📦 Получаю список поставок...")
+            
+            # Переходим на страницу поставок
+            await self.navigate_to_supplies_page()
+            await asyncio.sleep(3)
+            
+            supplies = []
+            
+            # Ищем элементы поставок
+            supply_elements = await self.page.query_selector_all('[data-testid*="supply"], .supply-item, .supply-card')
+            
+            for element in supply_elements:
+                try:
+                    # Извлекаем данные поставки
+                    text = await element.inner_text()
+                    if text:
+                        # Парсим ID поставки
+                        id_match = re.search(r'#(\d+)', text)
+                        supply_id = id_match.group(1) if id_match else "N/A"
+                        
+                        # Парсим статус
+                        status = "Неизвестно"
+                        if "запланировано" in text.lower():
+                            status = "Запланировано"
+                        elif "не запланировано" in text.lower():
+                            status = "Не запланировано"
+                        elif "в пути" in text.lower():
+                            status = "В пути"
+                        
+                        # Парсим дату
+                        date_match = re.search(r'(\d{2}\.\d{2}\.\d{4})', text)
+                        date = date_match.group(1) if date_match else "Не указана"
+                        
+                        supplies.append({
+                            "id": supply_id,
+                            "status": status,
+                            "date": date,
+                            "text": text[:100] + "..." if len(text) > 100 else text
+                        })
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка парсинга поставки: {e}")
+                    continue
+            
+            logger.info(f"✅ Найдено поставок: {len(supplies)}")
+            return supplies
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения поставок: {e}")
+            return []

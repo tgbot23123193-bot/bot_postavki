@@ -68,25 +68,10 @@ class SlotMonitoringService:
         self.api_key_errors: Dict[str, int] = {}  # api_key -> error_count
     
     async def initialize(self) -> None:
-        """Initialize Redis connection and other resources."""
-        try:
-            self.redis = aioredis.from_url(
-                self.settings.redis.url,
-                encoding=self.settings.redis.encoding,
-                decode_responses=self.settings.redis.decode_responses,
-                socket_timeout=self.settings.redis.socket_timeout,
-                socket_connect_timeout=self.settings.redis.socket_connect_timeout,
-                retry_on_timeout=self.settings.redis.retry_on_timeout,
-                health_check_interval=self.settings.redis.health_check_interval,
-            )
-            
-            # Test Redis connection
-            await self.redis.ping()
-            logger.info("Redis connection established")
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize Redis: {e}")
-            raise
+        """Initialize monitoring service (using PostgreSQL database only)."""
+        # Using PostgreSQL database only (no Redis)
+        self.redis = None
+        logger.info("Monitoring service initialized with PostgreSQL database")
     
     async def shutdown(self) -> None:
         """Shutdown monitoring service gracefully."""

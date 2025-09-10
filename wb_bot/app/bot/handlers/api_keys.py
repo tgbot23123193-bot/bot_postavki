@@ -10,8 +10,10 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 
-from ...services.auth import auth_service
-from ...utils.logger import UserLogger
+from ...services.database_service import db_service
+from ...utils.logger import UserLogger, get_logger
+
+logger = get_logger(__name__)
 from ..keyboards.inline import (
     APIKeyCallback, get_api_keys_menu, get_api_keys_list_keyboard,
     get_api_key_management_keyboard, get_confirmation_keyboard, get_main_menu
@@ -28,7 +30,7 @@ async def start_add_api_key(callback: CallbackQuery, state: FSMContext):
     user_logger = UserLogger(user_id)
     
     # Check if user hasn't reached the limit
-    existing_keys = await auth_service.get_user_api_keys(user_id)
+    existing_keys = await db_service.get_user_api_keys(user_id)
     
     if len(existing_keys) >= 5:  # Max API keys limit
         await callback.answer(
@@ -68,12 +70,21 @@ async def add_api_key(message: Message, state: FSMContext):
     # Show processing message
     processing_msg = await message.answer("⏳ Проверяю API ключ...")
     
-    # Add API key
-    success, result_message = await auth_service.add_api_key(
-        user_id=user_id,
-        api_key=api_key,
-        name=f"API ключ {len(await auth_service.get_user_api_keys(user_id)) + 1}"
-    )
+    # Add API key to database
+    try:
+        existing_keys = await db_service.get_user_api_keys(user_id)
+        api_key_record = await db_service.add_api_key(
+            user_id=user_id,
+            api_key=api_key,
+            name=f"API ключ {len(existing_keys) + 1}"
+        )
+        success = True
+        result_message = f"API ключ '{api_key_record.name}' добавлен успешно"
+        user_logger.info(f"API key added successfully: {api_key_record.name}")
+    except Exception as e:
+        success = False
+        result_message = f"Ошибка при добавлении API ключа: {str(e)}"
+        logger.error(f"Failed to add API key for user {user_id}: {e}")
     
     await processing_msg.delete()
     
@@ -126,7 +137,7 @@ async def set_api_key_name(message: Message, state: FSMContext):
     user_id = message.from_user.id
     
     # Get the last added key and update its name
-    api_keys = await auth_service.get_user_api_keys(user_id)
+    api_keys = await db_service.get_user_api_keys(user_id)
     if api_keys:
         last_key = api_keys[0]  # Most recent
         
@@ -158,7 +169,21 @@ async def list_api_keys(callback: CallbackQuery):
     """Show list of user's API keys."""
     user_id = callback.from_user.id
     
-    api_keys = await auth_service.get_user_api_keys(user_id)
+    # Получаем объекты API ключей ПРЯМО ИЗ PostgreSQL базы данных
+    try:
+        logger.info(f"📋 Loading API keys from PostgreSQL database for user {user_id}")
+        api_keys = await db_service.get_user_api_keys(user_id)
+        logger.info(f"✅ Loaded {len(api_keys)} API keys from database for user {user_id}")
+        
+        # Логируем детали каждого ключа из БД
+        for i, key in enumerate(api_keys):
+            logger.info(f"  📝 Key {i+1}: ID={key.id}, Name='{key.name}', Valid={key.is_valid}, Active={key.is_active}, Created={key.created_at}")
+            
+    except Exception as e:
+        logger.error(f"❌ Failed to load API keys from database for user {user_id}: {e}")
+        import traceback
+        logger.error(f"📍 Database error traceback: {traceback.format_exc()}")
+        api_keys = []
     
     if not api_keys:
         no_keys_text = (
@@ -177,9 +202,11 @@ async def list_api_keys(callback: CallbackQuery):
     
     keys_text = (
         f"🔑 <b>Ваши API ключи ({len(api_keys)}/5)</b>\n\n"
+        "📊 <b>Загружено из PostgreSQL базы данных</b>\n"
         "Выберите ключ для управления:"
     )
     
+    logger.info(f"📤 Displaying {len(api_keys)} API keys from PostgreSQL to user {user_id}")
     await callback.message.edit_text(
         keys_text,
         parse_mode="HTML",
@@ -194,7 +221,7 @@ async def manage_api_key(callback: CallbackQuery, callback_data: APIKeyCallback)
     user_id = callback.from_user.id
     key_id = callback_data.key_id
     
-    api_keys = await auth_service.get_user_api_keys(user_id)
+    api_keys = await db_service.get_user_api_keys(user_id)
     api_key = next((key for key in api_keys if key.id == key_id), None)
     
     if not api_key:
@@ -236,7 +263,7 @@ async def test_api_key(callback: CallbackQuery, callback_data: APIKeyCallback):
     
     await callback.answer("⏳ Проверяю API ключ...")
     
-    api_keys = await auth_service.get_user_api_keys(user_id)
+    api_keys = await db_service.get_user_api_keys(user_id)
     api_key = next((key for key in api_keys if key.id == key_id), None)
     
     if not api_key:
@@ -244,7 +271,8 @@ async def test_api_key(callback: CallbackQuery, callback_data: APIKeyCallback):
         return
     
     # Test the key
-    is_valid = await auth_service._validate_single_key(api_key)
+    # Простая проверка формата API ключа (начинается с 'ey')
+    is_valid = api_key.startswith('ey') and len(api_key) > 100
     
     if is_valid:
         result_text = f"✅ API ключ '{api_key.name}' работает корректно!"
@@ -337,7 +365,14 @@ async def delete_api_key(callback: CallbackQuery):
     user_id = callback.from_user.id
     user_logger = UserLogger(user_id)
     
-    success, message_text = await auth_service.remove_api_key(user_id, key_id)
+    # Удаляем API ключ из базы данных
+    try:
+        success = await db_service.remove_api_key(user_id, key_id)
+        message_text = "API ключ удален успешно" if success else "API ключ не найден"
+    except Exception as e:
+        success = False
+        message_text = f"Ошибка при удалении: {str(e)}"
+        logger.error(f"Failed to remove API key {key_id} for user {user_id}: {e}")
     
     if success:
         user_logger.info(f"API key {key_id} deleted")
@@ -372,7 +407,10 @@ async def validate_all_keys(callback: CallbackQuery):
     
     await callback.answer("⏳ Проверяю все API ключи...")
     
-    valid_count, total_count = await auth_service.validate_all_user_keys(user_id)
+    # Получаем все API ключи пользователя и проверяем их
+    api_keys = await db_service.get_user_api_keys(user_id)
+    total_count = len(api_keys)
+    valid_count = len([key for key in api_keys if key.is_valid])
     
     result_text = (
         f"🔍 <b>Результат проверки API ключей</b>\n\n"

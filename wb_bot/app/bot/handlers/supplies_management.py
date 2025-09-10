@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 
 from ...utils.logger import get_logger
 from ...services.wb_supplies_api import WBSuppliesAPIClient
-from .callbacks import user_api_keys
+# Removed user_api_keys - using PostgreSQL database only
 from ..keyboards.inline import back_to_main_menu_keyboard
 
 logger = get_logger(__name__)
@@ -66,7 +66,6 @@ def create_supplies_keyboard(supplies: List[Dict[str, Any]]) -> InlineKeyboardMa
     keyboard.extend([
         [InlineKeyboardButton(text="🔄 Обновить список", callback_data="supplies_refresh")],
         [InlineKeyboardButton(text="🏬 Склады", callback_data="view_warehouses")],
-        [InlineKeyboardButton(text="⚙️ Настройки", callback_data="supplies_settings")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="main_menu")]
     ])
     
@@ -107,7 +106,8 @@ async def show_supplies_menu(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     
     # Проверяем есть ли API ключ у пользователя
-    api_keys = user_api_keys.get(user_id, [])
+    from .callbacks import get_user_api_keys_list
+    api_keys = await get_user_api_keys_list(user_id)
     if not api_keys:
         await callback.message.edit_text(
             "❌ <b>API ключ не найден</b>\n\n"
@@ -178,7 +178,8 @@ async def show_warehouses_menu(callback: CallbackQuery, state: FSMContext):
     """Показывает список складов."""
     user_id = callback.from_user.id
     
-    api_keys = user_api_keys.get(user_id, [])
+    from .callbacks import get_user_api_keys_list
+    api_keys = await get_user_api_keys_list(user_id)
     if not api_keys:
         await callback.answer("❌ API ключ не найден", show_alert=True)
         return

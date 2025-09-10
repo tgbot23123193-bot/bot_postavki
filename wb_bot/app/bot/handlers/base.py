@@ -11,6 +11,10 @@ from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 
 from ..keyboards.inline import get_main_menu, MainMenuCallback
+from ...services.database_service import db_service
+from ...utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 router = Router()
 
@@ -19,13 +23,37 @@ router = Router()
 async def cmd_start(message: Message, state: FSMContext):
     """Handle /start command."""
     user_id = message.from_user.id
+    logger.info(f"🚀 START command from user {user_id}")
     
-    # Используем наш простой in-memory механизм из callbacks.py
-    from .callbacks import has_api_keys
+    # Создаем или обновляем пользователя в базе данных
+    try:
+        logger.info(f"📝 Creating/updating user {user_id}")
+        await db_service.get_or_create_user(
+            telegram_id=user_id,
+            username=message.from_user.username,
+            first_name=message.from_user.first_name,
+            last_name=message.from_user.last_name,
+            language_code=message.from_user.language_code
+        )
+        logger.info(f"✅ User {user_id} created/updated")
+        
+        # Получаем API ключи пользователя из базы данных
+        logger.info(f"🔍 Getting API keys for user {user_id}")
+        api_keys = await db_service.get_user_api_keys(user_id)
+        has_api_keys_db = len(api_keys) > 0
+        logger.info(f"🔑 Found {len(api_keys)} API keys for user {user_id}")
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to create/update user {user_id}: {e}")
+        import traceback
+        logger.error(f"📍 Traceback: {traceback.format_exc()}")
+        has_api_keys_db = False  # В случае ошибки считаем что ключей нет
     
     # Проверяем есть ли у пользователя API ключи
-    if has_api_keys(user_id):
+    logger.info(f"🔍 Checking has_api_keys_db for user {user_id}: {has_api_keys_db}")
+    if has_api_keys_db:
         # У пользователя есть API ключи - показываем главное меню
+        logger.info(f"✅ Showing MAIN MENU to user {user_id} (has API keys)")
         greeting = f"Привет, {message.from_user.first_name}! 👋"
         menu_text = (
             f"{greeting}\n\n"
@@ -39,8 +67,10 @@ async def cmd_start(message: Message, state: FSMContext):
             parse_mode="HTML",
             reply_markup=get_main_menu()
         )
+        logger.info(f"📤 MAIN MENU sent to user {user_id}")
     else:
         # У пользователя нет API ключей - запрашиваем добавление
+        logger.info(f"❌ Showing ADD API KEY menu to user {user_id} (no API keys)")
         welcome_text = (
             "🎉 <b>Добро пожаловать в WB Auto-Booking Bot!</b>\n\n"
             "Этот бот поможет вам:\n"
@@ -107,24 +137,61 @@ async def cmd_stats(message: Message):
     """Handle /stats command."""
     user_id = message.from_user.id
     
-    # Используем наш простой механизм
-    from .callbacks import get_user_keys_count, has_api_keys
-    
-    keys_count = get_user_keys_count(user_id)
-    
-    # Calculate stats (simplified version)
-    stats_text = (
-        f"📊 <b>Ваша статистика</b>\n\n"
-        f"👤 <b>Пользователь:</b> {message.from_user.first_name}\n"
-        f"🔑 <b>API ключей:</b> {keys_count}/5\n"
-        f"💎 <b>Статус:</b> {'✅ Готов к работе' if has_api_keys(user_id) else '❌ Нужен API ключ'}\n\n"
+    try:
+        # Получаем статистику пользователя из базы данных
+        stats = await db_service.get_user_stats(user_id)
         
-        f"📈 <b>Активность:</b>\n"
-        f"📊 Активных мониторингов: 0 (в разработке)\n"
-        f"🎯 Успешных бронирований: 0 (в разработке)\n\n"
+        if stats and stats.get('user'):
+            user = stats['user']
+            keys_count = stats.get('api_keys_count', 0)
+            active_tasks = stats.get('active_tasks_count', 0)
+            total_bookings = stats.get('total_bookings', 0)
+            successful_bookings = stats.get('successful_bookings', 0)
+            trial_left = stats.get('trial_bookings_left')
+            
+            # Calculate stats
+            stats_text = (
+                f"📊 <b>Ваша статистика</b>\n\n"
+                f"👤 <b>Пользователь:</b> {message.from_user.first_name}\n"
+                f"🔑 <b>API ключей:</b> {keys_count}/5\n"
+                f"💎 <b>Статус:</b> {'✅ Готов к работе' if keys_count > 0 else '❌ Нужен API ключ'}\n"
+                f"🎁 <b>Пробные бронирования:</b> {trial_left if trial_left is not None else 'Премиум'}\n\n"
+                
+                f"📈 <b>Активность:</b>\n"
+                f"📊 Активных мониторингов: {active_tasks}\n"
+                f"🎯 Всего бронирований: {total_bookings}\n"
+                f"✅ Успешных бронирований: {successful_bookings}\n"
+                f"📈 Процент успеха: {(successful_bookings/total_bookings*100) if total_bookings > 0 else 0:.1f}%\n\n"
+                
+                "Для подробной статистики используйте кнопку '📈 Статистика' в главном меню."
+            )
+        else:
+            # Fallback если пользователь не найден
+            stats_text = (
+                f"📊 <b>Ваша статистика</b>\n\n"
+                f"👤 <b>Пользователь:</b> {message.from_user.first_name}\n"
+                f"❌ Данные не найдены. Используйте /start для регистрации."
+            )
+            
+    except Exception as e:
+        logger.error(f"Failed to get user stats {user_id}: {e}")
+        # Fallback to in-memory storage
+        from .callbacks import get_user_keys_count, has_api_keys
         
-        "Для подробной статистики используйте кнопку '📈 Статистика' в главном меню."
-    )
+        keys_count = await get_user_keys_count(user_id)
+        has_keys = await has_api_keys(user_id)
+        stats_text = (
+            f"📊 <b>Ваша статистика</b>\n\n"
+            f"👤 <b>Пользователь:</b> {message.from_user.first_name}\n"
+            f"🔑 <b>API ключей:</b> {keys_count}/5\n"
+            f"💎 <b>Статус:</b> {'✅ Готов к работе' if has_keys else '❌ Нужен API ключ'}\n\n"
+            
+            f"📈 <b>Активность:</b>\n"
+            f"📊 Активных мониторингов: 0\n"
+            f"🎯 Успешных бронирований: 0\n\n"
+            
+            "Для подробной статистики используйте кнопку '📈 Статистика' в главном меню."
+        )
     
     await message.answer(stats_text, parse_mode="HTML", reply_markup=get_main_menu())
 

@@ -15,12 +15,35 @@ from ..keyboards.inline import MainMenuCallback
 from ..states import BookingStates
 from ...services.wb_booking import booking_service
 from ...services.wb_real_api import wb_real_api, user_api_keys
-from .callbacks import user_api_keys as local_api_keys
+# Removed user_api_keys - using PostgreSQL database only
+from ...services.database_service import db_service
 from ...utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 router = Router()
+
+
+async def get_user_first_api_key(user_id: int) -> str:
+    """Получает первый API ключ пользователя из PostgreSQL базы данных."""
+    try:
+        decrypted_keys = await db_service.get_decrypted_api_keys(user_id)
+        if decrypted_keys:
+            return decrypted_keys[0]
+        return None
+    except Exception as e:
+        logger.error(f"Failed to get API key for user {user_id}: {e}")
+        return None
+
+
+async def user_has_api_keys(user_id: int) -> bool:
+    """Проверяет есть ли у пользователя API ключи в PostgreSQL базе данных."""
+    try:
+        api_keys = await db_service.get_user_api_keys(user_id)
+        return len(api_keys) > 0
+    except Exception as e:
+        logger.error(f"Failed to check API keys for user {user_id}: {e}")
+        return False
 
 # Временное хранилище задач автобронирования
 user_booking_tasks = {}  # user_id: {task_id: task_info}
@@ -31,8 +54,8 @@ async def show_booking_menu(callback: CallbackQuery):
     """Показать меню автобронирования."""
     user_id = callback.from_user.id
     
-    # Проверяем наличие API ключей
-    if not local_api_keys.get(user_id):
+    # Проверяем наличие API ключей в PostgreSQL базе данных
+    if not await user_has_api_keys(user_id):
         await callback.answer("❌ Сначала добавьте API ключ", show_alert=True)
         return
     
@@ -41,21 +64,9 @@ async def show_booking_menu(callback: CallbackQuery):
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="➕ Создать автобронирование",
-            callback_data="create_booking"
-        )],
-        [InlineKeyboardButton(
-            text="📦 Забронировать поставку",
-            callback_data="book_existing_supply"
-        )],
-        [InlineKeyboardButton(
             text="🌐 Браузерное бронирование",
             callback_data="browser_booking"
         )],
-        [InlineKeyboardButton(
-            text=f"📋 Активные задачи ({len(active_tasks)})",
-            callback_data="list_bookings"
-        )] if active_tasks else [],
         [InlineKeyboardButton(
             text="❓ Как это работает",
             callback_data="booking_help"
@@ -130,7 +141,7 @@ async def create_booking_start(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     
     # Синхронизируем API ключи
-    user_api_keys.update(local_api_keys)
+    # Using PostgreSQL database only - no local storage
     
     # Получаем список складов
     loading_msg = await callback.message.edit_text(
@@ -140,7 +151,7 @@ async def create_booking_start(callback: CallbackQuery, state: FSMContext):
     
     try:
         async with wb_real_api as service:
-            warehouses = await service.get_warehouses(local_api_keys[user_id][0])
+            warehouses = await service.get_warehouses(await get_user_first_api_key(user_id))
         
         if not warehouses:
             await loading_msg.edit_text(
@@ -528,7 +539,6 @@ async def start_auto_booking(callback: CallbackQuery, state: FSMContext):
     )
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📋 Мои задачи", callback_data="list_bookings")],
         [InlineKeyboardButton(text="⬅️ В меню", callback_data="auto_booking")]
     ])
     
@@ -621,12 +631,12 @@ async def show_existing_supplies(callback: CallbackQuery):
     user_id = callback.from_user.id
     
     # Проверяем наличие API ключей
-    if not local_api_keys.get(user_id):
+    if not await user_has_api_keys(user_id):
         await callback.answer("❌ Сначала добавьте API ключ", show_alert=True)
         return
     
     # Синхронизируем API ключи
-    user_api_keys.update(local_api_keys)
+    # Using PostgreSQL database only - no local storage
     
     loading_msg = await callback.message.edit_text(
         "⏳ Загружаю список ваших поставок...",
@@ -638,7 +648,7 @@ async def show_existing_supplies(callback: CallbackQuery):
         from app.services.wb_supplies_new import WBSuppliesService
         
         async with WBSuppliesService() as wb_service:
-            supplies = await wb_service.get_available_supplies_for_booking(local_api_keys[user_id][0])
+            supplies = await wb_service.get_available_supplies_for_booking(await get_user_first_api_key(user_id))
         
         if not supplies:
             await loading_msg.edit_text(
@@ -766,7 +776,7 @@ async def manual_booking_handler(callback: CallbackQuery, state: FSMContext):
     
     try:
         async with wb_real_api as service:
-            supply_details = await service.get_supply_details(local_api_keys[user_id][0], supply_id)
+            supply_details = await service.get_supply_details(await get_user_first_api_key(user_id), supply_id)
             
             if not supply_details:
                 await loading_msg.edit_text(
@@ -1048,7 +1058,7 @@ async def start_auto_search(callback: CallbackQuery, state: FSMContext):
         
         async with wb_real_api as service:
             # Получаем детали поставки
-            supply_details = await service.get_supply_details(local_api_keys[user_id][0], supply_id)
+            supply_details = await service.get_supply_details(await get_user_first_api_key(user_id), supply_id)
             
             if not supply_details:
                 await monitoring_msg.edit_text(
@@ -1109,13 +1119,14 @@ async def start_auto_search(callback: CallbackQuery, state: FSMContext):
                     from app.services.wb_booking import WBBookingService
                     booking_service = WBBookingService()
                     
-                    result = await booking_service.book_existing_supply(
-                        api_key=local_api_keys[user_id][0],
+                    success, message = await booking_service.book_existing_supply(
+                        user_id=user_id,
                         supply_id=supply_id,
-                        date=best_slot['date']
+                        warehouse_id=warehouse_id,
+                        supply_date=best_slot['date']
                     )
                     
-                    if result.get('success'):
+                    if success:
                         await monitoring_msg.edit_text(
                             f"🎉 <b>Поставка успешно забронирована!</b>\n\n"
                             f"🆔 Поставка: #{supply_id}\n"
@@ -1131,10 +1142,9 @@ async def start_auto_search(callback: CallbackQuery, state: FSMContext):
                             ])
                         )
                     else:
-                        error_msg = result.get('error', 'Неизвестная ошибка')
                         await monitoring_msg.edit_text(
                             f"❌ <b>Не удалось забронировать</b>\n\n"
-                            f"Причина: {error_msg}\n\n"
+                            f"Причина: {message}\n\n"
                             f"Попробуйте еще раз",
                             parse_mode="HTML",
                             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
