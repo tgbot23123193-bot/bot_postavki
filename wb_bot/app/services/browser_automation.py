@@ -418,11 +418,11 @@ class WBBrowserAutomationPro:
             if random.random() < 0.1:  # 10% шанс на дополнительную паузу
                 await asyncio.sleep(random.uniform(0.1, 0.3))
     
-    async def _human_click(self, selector: str, delay_before: tuple = (0.5, 1.5)):
+    async def _human_click(self, selector: str, delay_before: tuple = (0.1, 0.3)):
         """Человеческий клик с задержкой и движением мыши."""
         await asyncio.sleep(random.uniform(*delay_before))
         
-        element = await self.page.wait_for_selector(selector, timeout=10000)
+        element = await self.page.wait_for_selector(selector, timeout=1000)
         
         # Наводим мышь на элемент
         await element.hover()
@@ -430,7 +430,7 @@ class WBBrowserAutomationPro:
         
         # Кликаем
         await element.click()
-        await asyncio.sleep(random.uniform(0.2, 0.5))
+        await asyncio.sleep(random.uniform(0.1, 0.3))
     
     async def check_if_logged_in(self) -> bool:
         """Проверяет, авторизован ли пользователь в WB и обновляет данные в БД."""
@@ -2182,7 +2182,7 @@ class WBBrowserAutomationPro:
                         
                         # Перезагружаем страницу для полного сброса
                         await self.page.reload(wait_until='domcontentloaded')
-                        await asyncio.sleep(3)
+                        await asyncio.sleep(1)
                         
                         # Переходим на нужную поставку заново
                         supply_url = f"https://seller.wildberries.ru/supplies-management/all?query={supply_id}"
@@ -2302,7 +2302,7 @@ class WBBrowserAutomationPro:
                     
                     # Сначала наводимся на кнопку (как человек)
                     await book_button.hover()
-                    await asyncio.sleep(random.uniform(0.3, 0.7))
+                    await asyncio.sleep(random.uniform(0.1, 0.3))
                     
                     # Прокручиваем к кнопке если нужно
                     await book_button.scroll_into_view_if_needed()
@@ -2513,11 +2513,16 @@ class WBBrowserAutomationPro:
                                 except:
                                     pass
                             
-                            min_date = datetime.now() + timedelta(hours=min_hours_ahead)
-                            logger.info(f"🕒 Минимальная дата для бронирования: {min_date.strftime('%d %B, %a')}")
+                            # БЛЯДЬ! НЕ МИНИМАЛЬНУЮ, А ТОЧНУЮ ДАТУ ЧЕРЕЗ 3 ДНЯ!
+                            target_date = datetime.now() + timedelta(days=3)
+                            target_day = target_date.day
+                            target_month = target_date.month
+                            target_year = target_date.year
                             
-                            # Берем первую подходящую дату (НЕ раньше min_date)
-                            suitable_date_found = False
+                            logger.info(f"🎯 ИЩЕМ ТОЧНУЮ ДАТУ: {target_date.strftime('%d %B %Y (%a)')} - день {target_day}, месяц {target_month}")
+                            
+                            # Ищем ИМЕННО эту дату, а не первую попавшуюся!
+                            target_date_found = False
                             for i in range(count):
                                 date_element = available_dates.nth(i)
                                 
@@ -2568,44 +2573,28 @@ class WBBrowserAutomationPro:
                                                 if parsed_date < datetime.now():
                                                     parsed_date = datetime(current_year + 1, month, day)
                                                 
-                                                logger.info(f"🔍 Распарсенная дата: {parsed_date}, минимальная: {min_date}")
+                                                logger.info(f"🔍 Распарсенная дата: {parsed_date}, целевая дата: {target_date}")
                                                 
-                                                # ВАЖНО: проверяем что дата НЕ СЕГОДНЯ и НЕ ЗАВТРА!
-                                                now = datetime.now()
-                                                today = datetime(now.year, now.month, now.day)
-                                                tomorrow = today + timedelta(days=1)
-                                                
-                                                # КРИТИЧНО: НЕ ВЫБИРАЕМ СЕГОДНЯШНЕЕ ЧИСЛО (10) даже в следующем году!
-                                                if parsed_date.day == now.day and parsed_date.month == now.month:
-                                                    logger.info(f"❌ Дата {clean_date_text} - то же число что и сегодня ({now.day}.{now.month}), ПРОПУСКАЕМ!")
-                                                    continue
-                                                
-                                                if parsed_date <= tomorrow:
-                                                    logger.info(f"❌ Дата {clean_date_text} слишком близко - это сегодня или завтра, ПРОПУСКАЕМ!")
-                                                    continue
-                                                
-                                                # Проверяем что дата подходит (не раньше min_date)
-                                                if parsed_date >= min_date:
-                                                    hours_diff = (parsed_date - datetime.now()).total_seconds() / 3600
-                                                    logger.info(f"✅ Дата {clean_date_text} подходит (через {hours_diff:.1f} часов)")
-                                                    suitable_date_found = True
+                                                # БЛЯДСКАЯ ТОЧНАЯ ПРОВЕРКА! НЕ "ПОДХОДЯЩАЯ", А "ТОЧНАЯ"!
+                                                if parsed_date.day == target_day and parsed_date.month == target_month:
+                                                    logger.info(f"🎯 ЭТО ОНА! ТОЧНАЯ ДАТА: {clean_date_text} = {target_day}.{target_month}")
+                                                    target_date_found = True
                                                 else:
-                                                    hours_diff = (parsed_date - datetime.now()).total_seconds() / 3600
-                                                    logger.info(f"❌ Дата {clean_date_text} слишком ранняя (через {hours_diff:.1f} часов, нужно минимум {min_hours_ahead})")
+                                                    logger.info(f"❌ Дата {clean_date_text} ({parsed_date.day}.{parsed_date.month}) != нужной ({target_day}.{target_month})")
                                                     continue
                                     except Exception as e:
                                         logger.warning(f"⚠️ Ошибка парсинга даты '{date_text}': {e}")
                                         # НЕ принимаем дату если не можем распарсить!
                                         continue
                                 
-                                if not suitable_date_found:
-                                    logger.info(f"❌ Дата {date_text} не подходит, ищу следующую...")
+                                if not target_date_found:
+                                    logger.info(f"❌ Дата {date_text} не та что нужна, ищу дальше...")
                                     continue
                                 
                                 # КРИТИЧЕСКИ ВАЖНО: кнопка появляется только при hover на дату!
                                 logger.info(f"🖱️ Навожу мышь на дату: {date_text}")
                                 await date_element.hover()
-                                await asyncio.sleep(1.5)  # Увеличиваем время ожидания появления кнопки
+                                await asyncio.sleep(0.5)  # Увеличиваем время ожидания появления кнопки
                                 
                                 # Ждем появления кнопки "Выбрать" с несколькими попытками
                                 select_button = None
@@ -2637,7 +2626,7 @@ class WBBrowserAutomationPro:
                                 for attempt in range(6):  # Больше попыток
                                     # Повторяем hover каждую попытку - кнопка может исчезнуть
                                     await date_element.hover()
-                                    await asyncio.sleep(0.8)  # Время для появления кнопки
+                                    await asyncio.sleep(0.5)  # Время для появления кнопки
                                     
                                     # Проверяем все селекторы
                                     for sel in select_selectors:
@@ -2831,7 +2820,7 @@ class WBBrowserAutomationPro:
                                         """)
                                         
                                         # Ждем немного
-                                        await asyncio.sleep(0.5)
+                                        await asyncio.sleep(0.2)
                                         
                                         # МЯГКИЙ клик на кнопку "Выбрать" - НЕ ЛОМАЕМ модальное окно!
                                         try:
@@ -2872,7 +2861,7 @@ class WBBrowserAutomationPro:
                                     logger.info("✅ Кликнул на дату")
                                 
                                 # КРИТИЧНО: Проверяем, что модальное окно не закрылось!
-                                await asyncio.sleep(2)
+                                await asyncio.sleep(1)
                                 popup_still_open = await self.page.locator('[class*="calendar"], [id*="Portal"]').count()
                                 if popup_still_open == 0:
                                     logger.error("❌ ДЕРЬМО! Модальное окно закрылось после клика!")
@@ -2889,7 +2878,8 @@ class WBBrowserAutomationPro:
                                 
                                 date_found = True
                                 selected_date = date_text
-                                await asyncio.sleep(2)  # Ждем активации кнопки "Забронировать"
+                                logger.info(f"🎯 ТОЧНАЯ ДАТА НАЙДЕНА И ВЫБРАНА! Выхожу из всех циклов.")
+                                await asyncio.sleep(0.5)  # Ждем активации кнопки "Забронировать"
                                 
                                 # Ищем кнопку "Забронировать" которая должна появиться после выбора даты
                                 final_book_button = None

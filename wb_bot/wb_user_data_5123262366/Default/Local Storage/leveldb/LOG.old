@@ -1,6 +1,3 @@
-2025/09/11-02:30:36.890 1aa4 Reusing MANIFEST C:\Users\HP\Desktop\work2\bot_postavki\wb_bot\wb_user_data_5123262366\Default\Local Storage\leveldb/MANIFEST-000001
-2025/09/11-02:30:36.894 1aa4 Recovering log #7
-2025/09/11-02:30:36.896 1aa4 Reusing old log C:\Users\HP\Desktop\work2\bot_postavki\wb_bot\wb_user_data_5123262366\Default\Local Storage\leveldb/000007.log 
-2025/09/11-02:34:39.638 38d4 Level-0 table #11: started
-2025/09/11-02:34:39.641 38d4 Level-0 table #11: 21251 bytes OK
-2025/09/11-02:34:39.644 38d4 Delete type=0 #7
+2025/09/12-01:43:56.651 3620 Reusing MANIFEST C:\Users\HP\Desktop\work2\bot_postavki\wb_bot\wb_user_data_5123262366\Default\Local Storage\leveldb/MANIFEST-000001
+2025/09/12-01:43:56.657 3620 Recovering log #13
+2025/09/12-01:43:56.659 3620 Reusing old log C:\Users\HP\Desktop\work2\bot_postavki\wb_bot\wb_user_data_5123262366\Default\Local Storage\leveldb/000013.log 
