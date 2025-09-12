@@ -22,22 +22,40 @@ logger = get_logger(__name__)
 class WBBrowserAutomationPro:
     """Профессиональная автоматизация браузера для WB с обходом детекции."""
     
-    def __init__(self, headless: bool = True, debug_mode: bool = False, user_id: int = None):
+    def __init__(self, headless: bool = True, debug_mode: bool = False, user_id: int = None, browser_type: str = "firefox"):
         self.headless = headless
         self.debug_mode = debug_mode
         self.user_id = user_id
+        self.browser_type = browser_type  # "chromium", "firefox", "webkit"
         self.playwright = None
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
         
-        # Если указан user_id, используем персональные пути для файлов
+        # МУЛЬТИБРАУЗЕРНАЯ ИЗОЛЯЦИЯ! Каждый браузер = уникальные файлы и порты  
         if user_id:
             self.cookies_file = Path(f"wb_cookies_{user_id}.json")
             self.user_data_dir = Path(f"wb_user_data_{user_id}")
+            self.screenshots_dir = Path(f"screenshots_{user_id}")
+            # КРИТИЧНО: уникальные порты! ХЕШИРУЕМ user_id чтобы получить число 0-999
+            self.port_offset = hash(str(user_id)) % 1000  # Хеш даст число 0-999
+            self.debug_port = 9222 + self.port_offset  # Порты 9222-10221
         else:
             self.cookies_file = Path("wb_cookies.json")
             self.user_data_dir = Path("wb_user_data")
+            self.screenshots_dir = Path("screenshots")
+            # Дефолтный порт для единственного браузера
+            self.debug_port = 9222
+            self.port_offset = 0
+            
+        # Создаем папки если их нет
+        self.user_data_dir.mkdir(exist_ok=True)
+        self.screenshots_dir.mkdir(exist_ok=True)
+        
+        if user_id:
+            logger.info(f"🔐 Мультибраузер: пользователь {user_id}, порт {self.debug_port} (offset: {self.port_offset})")
+            logger.info(f"📁 Данные: {self.user_data_dir}")
+            logger.info(f"📸 Скриншоты: {self.screenshots_dir}")
         
         # Коды стран для правильного парсинга номеров
         self.country_codes = {
@@ -223,6 +241,7 @@ class WBBrowserAutomationPro:
                 "--disable-extensions-except=",
                 "--disable-extensions",
                 "--disable-plugins",
+                f"--remote-debugging-port={self.debug_port}",  # УНИКАЛЬНЫЙ ПОРТ для каждого браузера!
                 "--disable-infobars",
                 "--disable-dev-shm-usage",
                 "--disable-background-timer-throttling",
@@ -266,41 +285,107 @@ class WBBrowserAutomationPro:
             # Создаем папку для пользовательских данных если не существует
             self.user_data_dir.mkdir(exist_ok=True)
             
-            # Запускаем браузер с постоянным профилем пользователя
-            self.browser = await self.playwright.chromium.launch_persistent_context(
-                user_data_dir=str(self.user_data_dir),
-                headless=self.headless,
-                args=browser_args,
-                slow_mo=50 if self.debug_mode else 0,  # Замедление для отладки
-                devtools=self.debug_mode and not self.headless,
-                # Настройки контекста встроены в persistent context
-                viewport=random.choice(self.viewports),
-                user_agent=random.choice(self.user_agents),
-                locale="ru-RU",
-                timezone_id="Europe/Moscow",
-                geolocation={"latitude": 55.7558, "longitude": 37.6176},  # Москва
-                permissions=["geolocation"],
-                color_scheme="light",
-                reduced_motion="no-preference",
-                forced_colors="none",
-                java_script_enabled=True,
-                accept_downloads=True,
-                ignore_https_errors=True,
-                bypass_csp=True,
-                extra_http_headers={
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                    "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
-                    "Accept-Encoding": "gzip, deflate, br",
-                    "DNT": "1",
-                    "Connection": "keep-alive",
-                    "Upgrade-Insecure-Requests": "1",
-                    "Sec-Fetch-Dest": "document",
-                    "Sec-Fetch-Mode": "navigate",
-                    "Sec-Fetch-Site": "none",
-                    "Sec-Fetch-User": "?1",
-                    "Cache-Control": "max-age=0"
+            # ВЫБИРАЕМ БРАУЗЕР ПО ТИПУ - FIREFOX ЛУЧШЕ ДЛЯ ОБХОДА ДЕТЕКЦИИ WB!
+            logger.info(f"🌐 Запускаю браузер: {self.browser_type.upper()}")
+            
+            if self.browser_type == "firefox":
+                # FIREFOX - лучший для обхода детекции WB!
+                firefox_prefs = {
+                    "dom.webdriver.enabled": False,
+                    "useAutomationExtension": False,
+                    "general.useragent.override": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0"
                 }
-            )
+                
+                self.browser = await self.playwright.firefox.launch_persistent_context(
+                    user_data_dir=str(self.user_data_dir),
+                    headless=self.headless,
+                    slow_mo=50 if self.debug_mode else 0,
+                    devtools=self.debug_mode and not self.headless,
+                    firefox_user_prefs=firefox_prefs,
+                    viewport=random.choice(self.viewports),
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
+                    locale="ru-RU",
+                    timezone_id="Europe/Moscow",
+                    geolocation={"latitude": 55.7558, "longitude": 37.6176},
+                    permissions=["geolocation"],
+                    color_scheme="light",
+                    java_script_enabled=True,
+                    accept_downloads=True,
+                    ignore_https_errors=True,
+                    bypass_csp=True,
+                    extra_http_headers={
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                        "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+                        "Accept-Encoding": "gzip, deflate, br",
+                        "DNT": "1",
+                        "Connection": "keep-alive",
+                        "Upgrade-Insecure-Requests": "1"
+                    }
+                )
+                
+            elif self.browser_type == "webkit":
+                # WEBKIT (Safari) - максимальный стелс!
+                self.browser = await self.playwright.webkit.launch_persistent_context(
+                    user_data_dir=str(self.user_data_dir),
+                    headless=self.headless,
+                    slow_mo=50 if self.debug_mode else 0,
+                    devtools=self.debug_mode and not self.headless,
+                    viewport=random.choice(self.viewports),
+                    user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
+                    locale="ru-RU",
+                    timezone_id="Europe/Moscow",
+                    geolocation={"latitude": 55.7558, "longitude": 37.6176},
+                    permissions=["geolocation"],
+                    color_scheme="light",
+                    java_script_enabled=True,
+                    accept_downloads=True,
+                    ignore_https_errors=True,
+                    bypass_csp=True,
+                    extra_http_headers={
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+                        "Accept-Encoding": "gzip, deflate, br",
+                        "Connection": "keep-alive",
+                        "Upgrade-Insecure-Requests": "1"
+                    }
+                )
+                
+            else:  # chromium (fallback)
+                # CHROMIUM - может детектироваться WB!
+                logger.warning("⚠️ Используется Chromium - может быть обнаружен WB!")
+                self.browser = await self.playwright.chromium.launch_persistent_context(
+                    user_data_dir=str(self.user_data_dir),
+                    headless=self.headless,
+                    args=browser_args,
+                    slow_mo=50 if self.debug_mode else 0,
+                    devtools=self.debug_mode and not self.headless,
+                    viewport=random.choice(self.viewports),
+                    user_agent=random.choice(self.user_agents),
+                    locale="ru-RU",
+                    timezone_id="Europe/Moscow",
+                    geolocation={"latitude": 55.7558, "longitude": 37.6176},
+                    permissions=["geolocation"],
+                    color_scheme="light",
+                    reduced_motion="no-preference",
+                    forced_colors="none",
+                    java_script_enabled=True,
+                    accept_downloads=True,
+                    ignore_https_errors=True,
+                    bypass_csp=True,
+                    extra_http_headers={
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                        "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+                        "Accept-Encoding": "gzip, deflate, br",
+                        "DNT": "1",
+                        "Connection": "keep-alive",
+                        "Upgrade-Insecure-Requests": "1",
+                        "Sec-Fetch-Dest": "document",
+                        "Sec-Fetch-Mode": "navigate",
+                        "Sec-Fetch-Site": "none",
+                        "Sec-Fetch-User": "?1",
+                        "Cache-Control": "max-age=0"
+                    }
+                )
             
             # При использовании launch_persistent_context, браузер И ЕСТЬ контекст
             self.context = self.browser
@@ -382,15 +467,45 @@ class WBBrowserAutomationPro:
             await self.page.add_init_script(script)
     
     async def _load_cookies(self):
-        """Загружаем сохраненные куки."""
-        if self.cookies_file.exists():
+        """ЗАГРУЖАЕМ СОХРАНЕННЫЕ КУКИ: СНАЧАЛА ИЗ БД, ПОТОМ ИЗ ФАЙЛА."""
+        cookies_loaded = False
+        
+        # ПРИОРИТЕТ 1: Загружаем из БД если есть user_id и валидная сессия
+        if self.user_id:
+            try:
+                session_data = await db_service.get_browser_session_data(self.user_id)
+                if session_data and session_data.get('session_valid'):
+                    logger.info(f"🔍 Найдена валидная сессия в БД для пользователя {self.user_id}")
+                    
+                    # Пытаемся загрузить куки из пути в БД
+                    cookies_file_from_db = session_data.get('cookies_file')
+                    if cookies_file_from_db and Path(cookies_file_from_db).exists():
+                        try:
+                            with open(cookies_file_from_db, 'r', encoding='utf-8') as f:
+                                cookies = json.load(f)
+                            await self.context.add_cookies(cookies)
+                            logger.info(f"🍪 Куки загружены из БД: {cookies_file_from_db}")
+                            cookies_loaded = True
+                        except Exception as e:
+                            logger.warning(f"⚠️ Ошибка загрузки куки из БД: {e}")
+                    else:
+                        logger.info(f"📁 Файл куков из БД не найден: {cookies_file_from_db}")
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка получения сессии из БД: {e}")
+        
+        # ПРИОРИТЕТ 2: Если из БД не загрузились - пытаемся из локального файла
+        if not cookies_loaded and self.cookies_file.exists():
             try:
                 with open(self.cookies_file, 'r', encoding='utf-8') as f:
                     cookies = json.load(f)
                 await self.context.add_cookies(cookies)
-                logger.info("🍪 Куки загружены")
+                logger.info(f"🍪 Куки загружены из локального файла: {self.cookies_file}")
+                cookies_loaded = True
             except Exception as e:
-                logger.warning(f"⚠️ Ошибка загрузки куки: {e}")
+                logger.warning(f"⚠️ Ошибка загрузки куки из файла: {e}")
+        
+        if not cookies_loaded:
+            logger.info("🔄 Куки не найдены, начинаем с чистой сессии")
     
     async def _save_cookies(self):
         """Сохраняем куки."""
@@ -401,6 +516,189 @@ class WBBrowserAutomationPro:
             logger.info("🍪 Куки сохранены")
         except Exception as e:
             logger.warning(f"⚠️ Ошибка сохранения куки: {e}")
+    
+    async def _check_booking_success(self) -> Dict[str, Any]:
+        """
+        ПРОВЕРЯЕТ РЕЗУЛЬТАТ БРОНИРОВАНИЯ НА СТРАНИЦЕ WB.
+        
+        Возвращает:
+        {
+            "success": bool,  # Успешно ли бронирование
+            "retry": bool,    # Нужна ли повторная попытка
+            "message": str    # Сообщение о результате
+        }
+        """
+        try:
+            logger.info("🔍 Анализирую результат бронирования...")
+            
+            # Ждем немного больше для загрузки ответа
+            await asyncio.sleep(5)
+            
+            # ИНДИКАТОРЫ УСПЕХА (включая информационные сообщения после успешного бронирования)
+            success_indicators = [
+                # Основные сообщения об успехе
+                'text="Поставка запланирована"',
+                'text="Поставка забронирована"', 
+                'text="Успешно"',
+                'text="Бронирование выполнено"',
+                'text="Дата выбрана"',
+                
+                # ИНФОРМАЦИОННЫЕ СООБЩЕНИЯ ПОСЛЕ УСПЕШНОГО БРОНИРОВАНИЯ
+                'text*="Обратите внимание, чтобы без проблем совершить отгрузку"',
+                'text*="сгенерировать и распечатать ШК коробов"',
+                'text*="распределить товары по коробам"',
+                'text*="оформить пропуск"',
+                'text*="можете сделать это во вкладках"',
+                'text*="Упаковка"',
+                'text*="Пропуск"',
+                
+                # Классы успеха
+                '[class*="success"]',
+                '[class*="confirm"]',
+                '.notification-success',
+                '.success-message',
+                
+                # Конкретные селекторы WB
+                '[data-testid*="success"]',
+                '[data-testid*="confirm"]'
+            ]
+            
+            # ИНДИКАТОРЫ ОШИБОК (НЕ ИНФОРМАЦИОННЫХ СООБЩЕНИЙ!)
+            error_indicators = [
+                # Основные сообщения об ошибках
+                'text*="Нет доступных слотов"',
+                'text*="Слот уже занят"',
+                'text*="Дата недоступна"',
+                'text*="Ошибка бронирования"',
+                'text*="Не удалось забронировать"',
+                'text*="Попробуйте позже"',
+                'text*="Время истекло"',
+                'text*="Превышено количество"',
+                
+                # Классы ТОЛЬКО критических ошибок
+                '[class*="error"]:not([class*="info"]):not([class*="notice"])',
+                '.notification-error',
+                '.error-message',
+                
+                # Конкретные селекторы WB критических ошибок
+                '[data-testid*="error"]:not([data-testid*="info"])'
+            ]
+            
+            # ПРОВЕРЯЕМ УСПЕХ
+            for indicator in success_indicators:
+                try:
+                    elements = self.page.locator(indicator)
+                    count = await elements.count()
+                    
+                    if count > 0:
+                        for i in range(count):
+                            element = elements.nth(i)
+                            if await element.is_visible():
+                                text = await element.text_content()
+                                logger.info(f"✅ Найден индикатор успеха: '{text}' через {indicator}")
+                                return {
+                                    "success": True,
+                                    "retry": False,
+                                    "message": f"🎉 Бронирование успешно: {text}"
+                                }
+                except Exception as e:
+                    logger.debug(f"Ошибка проверки индикатора успеха {indicator}: {e}")
+                    continue
+            
+            # ПРОВЕРЯЕМ ОШИБКИ
+            for indicator in error_indicators:
+                try:
+                    elements = self.page.locator(indicator)
+                    count = await elements.count()
+                    
+                    if count > 0:
+                        for i in range(count):
+                            element = elements.nth(i)
+                            if await element.is_visible():
+                                text = await element.text_content()
+                                logger.warning(f"⚠️ Найден индикатор ошибки: '{text}' через {indicator}")
+                                
+                                # Определяем нужна ли повторная попытка
+                                retry_keywords = ["попробуйте позже", "недоступна", "занят"]
+                                should_retry = any(keyword in text.lower() for keyword in retry_keywords)
+                                
+                                return {
+                                    "success": False,
+                                    "retry": should_retry,
+                                    "message": f"❌ Ошибка бронирования: {text}"
+                                }
+                except Exception as e:
+                    logger.debug(f"Ошибка проверки индикатора ошибки {indicator}: {e}")
+                    continue
+            
+            # ДОПОЛНИТЕЛЬНЫЕ ПРОВЕРКИ: изменилась ли страница
+            try:
+                # ПРОВЕРКА 1: Изменился ли URL (перенаправление после успешного бронирования)
+                current_url = self.page.url
+                logger.info(f"🔗 Текущий URL: {current_url}")
+                
+                # Если URL содержит признаки успешного бронирования
+                success_url_indicators = [
+                    "supply-created", "booking-success", "planned", "scheduled", 
+                    "success", "confirmed", "completed"
+                ]
+                
+                for indicator in success_url_indicators:
+                    if indicator in current_url.lower():
+                        logger.info(f"✅ URL содержит индикатор успеха: {indicator}")
+                        return {
+                            "success": True,
+                            "retry": False,
+                            "message": f"🎉 Успешное перенаправление на страницу результата: {indicator}"
+                        }
+                
+                # ПРОВЕРКА 2: Проверяем что модальное окно закрылось (признак завершения)
+                modal_selectors = [
+                    '[class*="calendar"]',
+                    '[id*="Portal"]', 
+                    '[role="dialog"]',
+                    '[class*="Modal"]',
+                    '[data-testid*="modal"]'
+                ]
+                
+                modal_still_open = False
+                for selector in modal_selectors:
+                    try:
+                        modal_count = await self.page.locator(selector).count()
+                        if modal_count > 0:
+                            modal_still_open = True
+                            break
+                    except:
+                        continue
+                
+                if not modal_still_open:
+                    logger.info("✅ Модальное окно закрылось - операция завершена")
+                    return {
+                        "success": True,
+                        "retry": False,
+                        "message": "🎉 Модальное окно закрылось - бронирование вероятно успешно"
+                    }
+                else:
+                    logger.info("⏳ Модальное окно все еще открыто - ждем...")
+                    
+            except Exception as e:
+                logger.debug(f"Ошибка проверки состояния страницы: {e}")
+            
+            # Если ничего определенного не найдено - неопределенность
+            logger.warning("⚠️ Результат бронирования неясен")
+            return {
+                "success": False,
+                "retry": True,
+                "message": "⚠️ Результат бронирования неясен, возможна повторная попытка"
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка проверки результата бронирования: {e}")
+            return {
+                "success": False,
+                "retry": True,
+                "message": f"❌ Ошибка проверки результата: {e}"
+            }
     
     async def _human_type(self, selector: str, text: str, delay_range: tuple = (50, 150)):
         """Человеческий ввод текста с вариативными задержками."""
@@ -2003,11 +2301,16 @@ class WBBrowserAutomationPro:
         return ""
     
     async def take_screenshot(self, filename: str = "screenshot.png") -> bool:
-        """Сделать скриншот."""
+        """Сделать скриншот в папку браузера."""
         try:
             if self.page:
-                await self.page.screenshot(path=filename, full_page=True)
-                logger.info(f"📸 Скриншот сохранен: {filename}")
+                # МУЛЬТИБРАУЗЕРНЫЕ СКРИНШОТЫ! Каждый в свою папку
+                screenshot_path = self.screenshots_dir / filename
+                await self.page.screenshot(path=str(screenshot_path), full_page=True)
+                if self.user_id:
+                    logger.info(f"📸 Скриншот браузера {self.user_id} сохранен: {screenshot_path}")
+                else:
+                    logger.info(f"📸 Скриншот сохранен: {screenshot_path}")
                 return True
         except Exception as e:
             logger.error(f"❌ Ошибка создания скриншота: {e}")
@@ -3223,7 +3526,30 @@ class WBBrowserAutomationPro:
                         result["message"] = f"❌ Ошибка клика на кнопку подтверждения: {clean_error}"
                         return result
                 
-                await asyncio.sleep(3)
+                # КРИТИЧНО: ЖДЕМ ОТВЕТА ОТ WB О РЕЗУЛЬТАТЕ БРОНИРОВАНИЯ!
+                logger.info("⏳ Жду ответа от WB о результате бронирования...")
+                await asyncio.sleep(3)  # Базовое ожидание для реакции сервера
+                
+                # ПРОВЕРЯЕМ РЕЗУЛЬТАТ БРОНИРОВАНИЯ
+                booking_result = await self._check_booking_success()
+                
+                if booking_result["success"]:
+                    logger.info(f"🎉 БРОНИРОВАНИЕ УСПЕШНО! {booking_result['message']}")
+                    result["success"] = True
+                    result["message"] = booking_result["message"]
+                    return result
+                elif booking_result["retry"]:
+                    logger.warning(f"⚠️ Нужна повторная попытка: {booking_result['message']}")
+                    if attempt < max_attempts:
+                        await asyncio.sleep(2)  # Пауза между попытками
+                        continue
+                    else:
+                        result["message"] = f"❌ Превышено максимальное количество попыток: {booking_result['message']}"
+                        return result
+                else:
+                    logger.error(f"❌ БРОНИРОВАНИЕ НЕУДАЧНО: {booking_result['message']}")
+                    result["message"] = booking_result["message"]
+                    return result
                 
                 # Шаг 6: Проверяем результат бронирования
                 success = False

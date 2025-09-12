@@ -1,2 +1,3 @@
-2025/09/08-16:24:44.277 530 Creating DB C:\Users\HP\Desktop\work2\bot_postavki\wb_bot\wb_user_data_1373289742\Default\shared_proto_db\metadata since it was missing.
-2025/09/08-16:24:44.285 530 Reusing MANIFEST C:\Users\HP\Desktop\work2\bot_postavki\wb_bot\wb_user_data_1373289742\Default\shared_proto_db\metadata/MANIFEST-000001
+2025/09/12-12:00:41.376 5ac8 Reusing MANIFEST C:\Users\HP\Desktop\work2\bot_postavki\wb_bot\wb_user_data_1373289742\Default\shared_proto_db\metadata/MANIFEST-000001
+2025/09/12-12:00:41.377 5ac8 Recovering log #3
+2025/09/12-12:00:41.377 5ac8 Reusing old log C:\Users\HP\Desktop\work2\bot_postavki\wb_bot\wb_user_data_1373289742\Default\shared_proto_db\metadata/000003.log 

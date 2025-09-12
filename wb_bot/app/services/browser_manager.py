@@ -10,97 +10,115 @@ from ..utils.logger import get_logger
 logger = get_logger(__name__)
 
 class BrowserManager:
-    """Глобальный менеджер браузерных сессий."""
+    """МУЛЬТИБРАУЗЕРНЫЙ менеджер сессий - КАЖДЫЙ ПОЛЬЗОВАТЕЛЬ = ОТДЕЛЬНЫЙ БРАУЗЕР!"""
     
     def __init__(self):
-        self._browser: Optional[WBBrowserAutomationPro] = None
+        # КРИТИЧНО: СЛОВАРЬ БРАУЗЕРОВ! Каждый user_id = отдельный браузер
+        self._browsers: Dict[int, WBBrowserAutomationPro] = {}  # user_id -> browser_instance
         self._active_users: Dict[int, Any] = {}  # user_id -> session_data
         self._lock = asyncio.Lock()
     
-    async def get_browser(self, user_id: int, headless: bool = True, debug_mode: bool = False) -> Optional[WBBrowserAutomationPro]:
-        """Получает или создает браузер для пользователя."""
+    async def get_browser(self, user_id: int, headless: bool = True, debug_mode: bool = False, browser_type: str = "firefox") -> Optional[WBBrowserAutomationPro]:
+        """ПОЛУЧАЕТ ИЛИ СОЗДАЕТ ОТДЕЛЬНЫЙ БРАУЗЕР ДЛЯ КАЖДОГО ПОЛЬЗОВАТЕЛЯ!"""
         async with self._lock:
-            # Если браузер уже запущен, возвращаем его
-            if self._browser and self._browser.page and not self._browser.page.is_closed():
-                logger.info(f"🔄 Переиспользуем существующий браузер для пользователя {user_id}")
-                self._active_users[user_id] = {
-                    "headless": headless,
-                    "debug_mode": debug_mode,
-                    "last_used": asyncio.get_event_loop().time()
-                }
-                return self._browser
+            # ПРОВЕРЯЕМ: есть ли уже браузер для ЭТОГО пользователя
+            if user_id in self._browsers:
+                browser = self._browsers[user_id]
+                if browser and browser.page and not browser.page.is_closed():
+                    logger.info(f"🔄 Переиспользуем браузер пользователя {user_id} (порт {browser.debug_port})")
+                    self._active_users[user_id] = {
+                        "headless": headless,
+                        "debug_mode": debug_mode,
+                        "last_used": asyncio.get_event_loop().time()
+                    }
+                    return browser
+                else:
+                    # Браузер умер - удаляем из словаря
+                    logger.warning(f"⚠️ Браузер пользователя {user_id} не активен, создаю новый")
+                    del self._browsers[user_id]
             
-            # Создаем новый браузер
+            # СОЗДАЕМ НОВЫЙ БРАУЗЕР ДЛЯ ЭТОГО ПОЛЬЗОВАТЕЛЯ
             try:
                 logger.info(f"🚀 Создаю новый браузер для пользователя {user_id}")
-                self._browser = WBBrowserAutomationPro(
+                browser = WBBrowserAutomationPro(
                     headless=headless, 
                     debug_mode=debug_mode, 
-                    user_id=user_id
+                    user_id=user_id,
+                    browser_type=browser_type  # ПЕРЕДАЕМ ТИП БРАУЗЕРА!
                 )
                 
                 logger.info(f"🔄 Запускаю браузер для пользователя {user_id}...")
-                success = await self._browser.start_browser(headless=headless)
+                success = await browser.start_browser(headless=headless)
                 logger.info(f"📊 Результат запуска браузера: {success}")
                 
                 if not success:
                     logger.error(f"❌ Не удалось запустить браузер для пользователя {user_id}")
-                    self._browser = None
                     return None
                 
+                # СОХРАНЯЕМ в словарь браузеров
+                self._browsers[user_id] = browser
                 self._active_users[user_id] = {
                     "headless": headless,
                     "debug_mode": debug_mode,
                     "last_used": asyncio.get_event_loop().time()
                 }
                 
-                logger.info(f"✅ Браузер успешно создан для пользователя {user_id}")
-                return self._browser
+                logger.info(f"✅ Браузер успешно создан для пользователя {user_id} (порт {browser.debug_port})")
+                return browser
                 
             except Exception as e:
                 logger.error(f"❌ Ошибка создания браузера для пользователя {user_id}: {e}")
                 logger.error(f"❌ Тип ошибки: {type(e).__name__}")
                 import traceback
                 logger.error(f"❌ Трассировка: {traceback.format_exc()}")
-                self._browser = None
                 return None
     
     async def close_browser(self, user_id: int) -> bool:
-        """Закрывает браузер для конкретного пользователя."""
+        """ЗАКРЫВАЕТ БРАУЗЕР КОНКРЕТНОГО ПОЛЬЗОВАТЕЛЯ."""
         async with self._lock:
+            # Удаляем пользователя из активных
             if user_id in self._active_users:
                 del self._active_users[user_id]
                 logger.info(f"👤 Пользователь {user_id} отключен от браузера")
             
-            # Если больше нет активных пользователей, закрываем браузер
-            if not self._active_users and self._browser:
+            # ЗАКРЫВАЕМ БРАУЗЕР ЭТОГО ПОЛЬЗОВАТЕЛЯ
+            if user_id in self._browsers:
+                browser = self._browsers[user_id]
                 try:
-                    await self._browser.close_browser()
-                    logger.info("🔒 Браузер закрыт (нет активных пользователей)")
+                    await browser.close_browser()
+                    logger.info(f"🔒 Браузер пользователя {user_id} закрыт")
                 except Exception as e:
-                    logger.warning(f"⚠️ Ошибка закрытия браузера: {e}")
+                    logger.warning(f"⚠️ Ошибка закрытия браузера пользователя {user_id}: {e}")
                 finally:
-                    self._browser = None
+                    del self._browsers[user_id]
                 return True
             
             return False
     
     async def force_close_browser(self) -> None:
-        """Принудительно закрывает браузер."""
+        """ПРИНУДИТЕЛЬНО ЗАКРЫВАЕТ ВСЕ БРАУЗЕРЫ."""
         async with self._lock:
-            if self._browser:
+            # ЗАКРЫВАЕМ ВСЕ БРАУЗЕРЫ
+            for user_id, browser in self._browsers.items():
                 try:
-                    await self._browser.close_browser()
-                    logger.info("🔒 Браузер принудительно закрыт")
+                    await browser.close_browser()
+                    logger.info(f"🔒 Браузер пользователя {user_id} принудительно закрыт")
                 except Exception as e:
-                    logger.warning(f"⚠️ Ошибка принудительного закрытия браузера: {e}")
-                finally:
-                    self._browser = None
-                    self._active_users.clear()
+                    logger.warning(f"⚠️ Ошибка принудительного закрытия браузера {user_id}: {e}")
+            
+            # ОЧИЩАЕМ ВСЕ СЛОВАРИ
+            self._browsers.clear()
+            self._active_users.clear()
     
-    def is_browser_active(self) -> bool:
-        """Проверяет, активен ли браузер."""
-        return self._browser is not None and self._browser.page is not None and not self._browser.page.is_closed()
+    def is_browser_active(self, user_id: int = None) -> bool:
+        """ПРОВЕРЯЕТ АКТИВНОСТЬ БРАУЗЕРА КОНКРЕТНОГО ПОЛЬЗОВАТЕЛЯ ИЛИ ЛЮБОГО."""
+        if user_id:
+            # Проверяем браузер конкретного пользователя
+            browser = self._browsers.get(user_id)
+            return browser is not None and browser.page is not None and not browser.page.is_closed()
+        else:
+            # Проверяем есть ли хотя бы один активный браузер
+            return len(self._browsers) > 0
     
     def get_active_users(self) -> list:
         """Возвращает список активных пользователей."""
