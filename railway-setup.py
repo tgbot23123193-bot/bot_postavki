@@ -31,11 +31,13 @@ def main():
     encryption_key = generate_key(32)
     jwt_secret = generate_key(32)
     webhook_secret = generate_key(16)
+    payment_webhook_secret = generate_key(32)
     
     print_header("🔐 СГЕНЕРИРОВАННЫЕ КЛЮЧИ БЕЗОПАСНОСТИ")
     print(f"SECURITY_ENCRYPTION_KEY: {encryption_key}")
     print(f"SECURITY_JWT_SECRET: {jwt_secret}")
     print(f"TG_WEBHOOK_SECRET: {webhook_secret}")
+    print(f"PAYMENT_WEBHOOK_SECRET: {payment_webhook_secret}")
     
     print("\n⚠️  ВАЖНО: Сохраните эти ключи в безопасном месте!")
     
@@ -55,10 +57,27 @@ def main():
         ("TG_BOT_TOKEN", "ВАШ_ТОКЕН_ОТ_BOTFATHER", "Получите от @BotFather в Telegram"),
         ("SECURITY_ENCRYPTION_KEY", encryption_key, "Ключ шифрования (сгенерирован)"),
         ("SECURITY_JWT_SECRET", jwt_secret, "JWT секрет (сгенерирован)"),
-        ("TG_WEBHOOK_SECRET", webhook_secret, "Webhook секрет (сгенерирован)")
+        ("TG_WEBHOOK_SECRET", webhook_secret, "Webhook секрет (сгенерирован)"),
+        ("PAYMENT_WEBHOOK_SECRET", payment_webhook_secret, "Webhook секрет для ЮKassa (сгенерирован)")
     ]
     
     for var_name, var_value, description in variables:
+        print(f"{var_name}={var_value}")
+        print(f"  └─ {description}")
+        print()
+    
+    # ЮKassa переменные  
+    print("💳 ПЕРЕМЕННЫЕ ЮKASSA:")
+    print("-" * 30)
+    
+    yookassa_vars = [
+        ("PAYMENT_YOOKASSA_SHOP_ID", "ВАШИ_SHOP_ID_ИЗ_ЮKASSA", "Shop ID из личного кабинета ЮKassa"),
+        ("PAYMENT_YOOKASSA_SECRET_KEY", "ВАШ_SECRET_KEY_ИЗ_ЮKASSA", "Secret Key из личного кабинета ЮKassa"),
+        ("PAYMENT_ENABLED", "true", "Включить систему платежей"),
+        ("PAYMENT_TEST_MODE", "false", "Тестовый режим (true для тестов)")
+    ]
+    
+    for var_name, var_value, description in yookassa_vars:
         print(f"{var_name}={var_value}")
         print(f"  └─ {description}")
         print()
@@ -85,6 +104,15 @@ def main():
     print("3. Следуйте инструкциям для создания бота")
     print("4. Скопируйте полученный токен")
     print("5. Вставьте его в переменную TG_BOT_TOKEN")
+    
+    print_header("💳 КАК ПОЛУЧИТЬ КЛЮЧИ ЮKASSA")
+    print("1. Зарегистрируйтесь на yookassa.ru")
+    print("2. Пройдите верификацию")
+    print("3. В личном кабинете:")
+    print("   • Настройки → Магазин → скопируйте Shop ID")
+    print("   • Настройки → API ключи → создайте Secret Key")
+    print("4. Добавьте ключи в переменные Railway")
+    print("5. Для тестов используйте песочницу ЮKassa")
     
     print_header("📍 КАК УЗНАТЬ ВАШ TELEGRAM ID")
     print("1. Откройте Telegram и найдите @userinfobot")
