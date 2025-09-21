@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 from playwright_stealth import stealth_async
-from app.utils.logger import get_logger
+from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
 

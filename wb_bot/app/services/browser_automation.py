@@ -14,8 +14,8 @@ from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime, timedelta
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 import playwright_stealth
-from app.utils.logger import get_logger
-from app.services.database_service import db_service
+from ..utils.logger import get_logger
+from .database_service import db_service
 
 logger = get_logger(__name__)
 

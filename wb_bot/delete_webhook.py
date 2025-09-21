@@ -9,7 +9,7 @@ and allow polling mode to work correctly.
 import asyncio
 import sys
 from aiogram import Bot
-from app.config import get_settings
+from .app.config import get_settings
 
 async def delete_webhook():
     """Delete webhook for the bot."""

@@ -6,7 +6,7 @@
 import asyncio
 import signal
 import sys
-from app.main import BotApplication
+from .app.main import BotApplication
 
 async def main():
     print("🔄 Перезапускаем бота с исправлениями...")

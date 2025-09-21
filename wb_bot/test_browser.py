@@ -4,7 +4,7 @@
 
 import asyncio
 import sys
-from app.services.browser_automation import WBBrowserAutomation
+from .app.services.browser_automation import WBBrowserAutomation
 
 
 async def main():

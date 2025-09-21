@@ -4,7 +4,7 @@
 """
 import asyncio
 import logging
-from app.services.browser_manager import browser_manager
+from .app.services.browser_manager import browser_manager
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)

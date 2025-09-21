@@ -645,7 +645,7 @@ async def show_existing_supplies(callback: CallbackQuery):
     
     try:
         # Используем новый сервис для получения поставок
-        from app.services.wb_supplies_new import WBSuppliesService
+        from ...services.wb_supplies_new import WBSuppliesService
         
         async with WBSuppliesService() as wb_service:
             supplies = await wb_service.get_available_supplies_for_booking(await get_user_first_api_key(user_id))
@@ -1116,7 +1116,7 @@ async def start_auto_search(callback: CallbackQuery, state: FSMContext):
                     )
                     
                     # Бронируем
-                    from app.services.wb_booking import WBBookingService
+                    from ...services.wb_booking import WBBookingService
                     booking_service = WBBookingService()
                     
                     success, message = await booking_service.book_existing_supply(

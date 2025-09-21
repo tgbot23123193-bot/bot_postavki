@@ -6,8 +6,8 @@
 
 import asyncio
 import time
-from app.services.browser_automation import WBBrowserAutomationPro
-from app.utils.logger import get_logger
+from .app.services.browser_automation import WBBrowserAutomationPro
+from .app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

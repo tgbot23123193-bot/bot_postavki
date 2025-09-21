@@ -44,9 +44,9 @@ git push -u origin main
 
 ```env
 TG_BOT_TOKEN=получите_от_@BotFather
-SECURITY_ENCRYPTION_KEY=ключ_из_railway-setup.py
-SECURITY_JWT_SECRET=ключ_из_railway-setup.py  
-TG_WEBHOOK_SECRET=ключ_из_railway-setup.py
+SECURITY_ENCRYPTION_KEY=MCE7AaXntGlOs-TsbwZtvmTr2v5ZLgQp313qJ41uxx0
+SECURITY_JWT_SECRET=Dq024Qv6y1uZyy7afd4cVpT01dTkPzFcAofFB3e6oQc
+TG_WEBHOOK_SECRET=3dsY5-Kw6z6FYMHbf4sSKQ
 ```
 
 ## 🔧 ПОЛЕЗНЫЕ КОМАНДЫ
