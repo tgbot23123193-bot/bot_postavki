@@ -11,6 +11,7 @@ import re
 import time
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
+from datetime import datetime, timedelta
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 import playwright_stealth
 from app.utils.logger import get_logger
@@ -391,6 +392,7 @@ class WBBrowserAutomationPro:
             self.context = self.browser
             
             # Создаем страницу
+            logger.info(f"📄 СОЗДАЮ ГЛАВНУЮ СТРАНИЦУ для пользователя {self.user_id}")
             self.page = await self.context.new_page()
             
             # Применяем stealth режим для максимального обхода детекции
@@ -531,8 +533,8 @@ class WBBrowserAutomationPro:
         try:
             logger.info("🔍 Анализирую результат бронирования...")
             
-            # Ждем немного больше для загрузки ответа
-            await asyncio.sleep(5)
+            # БЛЯДЬ! Ждем НАМНОГО ДОЛЬШЕ для загрузки ответа от WB!
+            await asyncio.sleep(10)  # УВЕЛИЧИЛ С 5 ДО 10 СЕКУНД!
             
             # ИНДИКАТОРЫ УСПЕХА (включая информационные сообщения после успешного бронирования)
             success_indicators = [
@@ -637,6 +639,20 @@ class WBBrowserAutomationPro:
                 current_url = self.page.url
                 logger.info(f"🔗 Текущий URL: {current_url}")
                 
+                # КРИТИЧНО: ПРОВЕРЯЕМ ИЗМЕНЕНИЕ SUPPLY ID В URL!
+                # После успешного бронирования WB меняет supplyId в URL
+                if "supplyId=" in current_url:
+                    import re
+                    url_supply_match = re.search(r'supplyId=(\d+)', current_url)
+                    if url_supply_match:
+                        url_supply_id = url_supply_match.group(1)
+                        logger.info(f"🆔 НОВЫЙ SUPPLY ID В URL: {url_supply_id}")
+                        return {
+                            "success": True,
+                            "retry": False,
+                            "message": f"🎉 Бронирование успешно! Новый supply ID: {url_supply_id}"
+                        }
+                
                 # Если URL содержит признаки успешного бронирования
                 success_url_indicators = [
                     "supply-created", "booking-success", "planned", "scheduled", 
@@ -700,6 +716,742 @@ class WBBrowserAutomationPro:
                 "message": f"❌ Ошибка проверки результата: {e}"
             }
     
+    async def _get_booking_details(self, supply_id: str) -> Dict[str, Any]:
+        """
+        Получает детали бронирования: дату, склад, коэффициент.
+        
+        Args:
+            supply_id: ID поставки
+            
+        Returns:
+            Словарь с деталями бронирования
+        """
+        try:
+            logger.info(f"📋 Получаю детали бронирования для поставки {supply_id}")
+            
+            # Дата, которую мы забронировали
+            from datetime import datetime, timedelta
+            # Если была передана кастомная дата, пытаемся ее получить из результата
+            # По умолчанию используем дату через 3 дня
+            target_date = datetime.now() + timedelta(days=3)
+            booking_date = target_date.strftime('%d.%m.%Y')
+            
+            # Получаем API ключи пользователя для запроса к WB API
+            from .database_service import DatabaseService
+            db_service = DatabaseService()
+            
+            try:
+                api_keys = await db_service.get_decrypted_api_keys(self.user_id)
+                logger.info(f"🔑 API ключи для пользователя {self.user_id}: найдено {len(api_keys) if api_keys else 0}")
+                
+                if not api_keys:
+                    logger.warning(f"⚠️ У пользователя {self.user_id} нет API ключей для получения деталей поставки")
+                    return {
+                        "booking_date": booking_date,
+                        "warehouse_name": "Неизвестен (нет API ключа)",
+                        "coefficient": "Неизвестен (нет API ключа)"
+                    }
+                
+                # Используем первый доступный API ключ
+                api_key = api_keys[0]
+                
+                # Получаем детали поставки через API
+                from .wb_supplies_api import WBSuppliesAPIClient
+                
+                async with WBSuppliesAPIClient(api_key) as wb_api:
+                    # ПРАВИЛЬНЫЙ СПОСОБ: Используем официальный API WB для получения деталей поставки
+                    supply_details = None
+                    
+                    try:
+                        # Сначала пробуем как ID поставки
+                        logger.info(f"🔍 Пробую получить детали как ID поставки: {supply_id}")
+                        supply_details = await wb_api.get_supply_details(supply_id, is_preorder_id=False)
+                    except Exception as e:
+                        logger.warning(f"⚠️ Не удалось получить как ID поставки: {e}")
+                        
+                        try:
+                            # Если не получилось, пробуем как ID заказа (preorderID)
+                            logger.info(f"🔍 Пробую получить детали как ID заказа: {supply_id}")
+                            supply_details = await wb_api.get_supply_details(supply_id, is_preorder_id=True)
+                        except Exception as e2:
+                            logger.warning(f"⚠️ Не удалось получить как ID заказа: {e2}")
+                            supply_details = None
+                    
+                    # Извлекаем склад из детальной информации
+                    warehouse_name = "Неизвестен"
+                    warehouse_id = None
+                    
+                    if supply_details:
+                        logger.info(f"📋 Получены детали поставки: {supply_details}")
+                        
+                        # Согласно документации API, поля для склада:
+                        warehouse_id = supply_details.get("warehouseID")
+                        warehouse_name = supply_details.get("warehouseName", "Неизвестен")
+                        
+                        # Если основной склад не указан, проверяем actualWarehouse
+                        if not warehouse_id:
+                            warehouse_id = supply_details.get("actualWarehouseID")
+                            warehouse_name = supply_details.get("actualWarehouseName", warehouse_name)
+                        
+                        logger.info(f"🏬 Извлечен склад: ID={warehouse_id}, Название={warehouse_name}")
+                    else:
+                        logger.warning(f"⚠️ Не удалось получить детали поставки {supply_id} через API")
+                    
+                    # Получаем коэффициент для даты бронирования
+                    coefficient = "Неизвестен"
+                    
+                    # Сначала проверяем есть ли коэффициент в деталях поставки
+                    if supply_details:
+                        paid_coeff = supply_details.get("paidAcceptanceCoefficient")
+                        if paid_coeff is not None:
+                            coefficient = paid_coeff
+                            logger.info(f"📊 Коэффициент из деталей поставки: {coefficient}")
+                    
+                    # Если коэффициента нет в деталях, получаем через API приёмки
+                    if coefficient == "Неизвестен":
+                        try:
+                            date_str = target_date.strftime('%Y-%m-%d')
+                            logger.info(f"🔍 Ищу коэффициент приёмки для даты {date_str}")
+                            
+                            if warehouse_id:
+                                # Получаем коэффициенты для конкретного склада
+                                coefficients = await wb_api.get_acceptance_coefficients([warehouse_id])
+                                logger.info(f"📊 Получено {len(coefficients)} коэффициентов для склада {warehouse_id}")
+                                
+                                # Ищем коэффициент для нашей даты
+                                for coeff in coefficients:
+                                    coeff_date = coeff.get("date")
+                                    coeff_warehouse = coeff.get("warehouseID")
+                                    coeff_value = coeff.get("coefficient")
+                                    
+                                    logger.info(f"📊 Проверяю коэф: дата={coeff_date}, склад={coeff_warehouse}, значение={coeff_value}")
+                                    
+                                    if coeff_date == date_str and coeff_warehouse == warehouse_id:
+                                        coefficient = coeff_value
+                                        logger.info(f"✅ Найден коэффициент приёмки: {coefficient}")
+                                        break
+                            else:
+                                # Если нет ID склада, получаем коэффициенты для всех складов
+                                coefficients = await wb_api.get_acceptance_coefficients()
+                                logger.info(f"📊 Получено {len(coefficients)} коэффициентов для всех складов")
+                                
+                                # Ищем любой коэффициент для нашей даты
+                                for coeff in coefficients:
+                                    if coeff.get("date") == date_str:
+                                        coefficient = coeff.get("coefficient", "Неизвестен")
+                                        logger.info(f"✅ Найден коэффициент приёмки {coefficient}")
+                                        break
+                                        
+                        except Exception as coeff_error:
+                            logger.warning(f"⚠️ Не удалось получить коэффициент приёмки: {coeff_error}")
+                            coefficient = "Ошибка получения"
+            
+            except Exception as api_error:
+                logger.warning(f"⚠️ Ошибка получения деталей через API: {api_error}")
+                # FALLBACK: Хотя бы дату покажем
+                return {
+                    "booking_date": booking_date,
+                    "warehouse_name": "API недоступен", 
+                    "coefficient": "API недоступен"
+                }
+            
+            logger.info(f"✅ Детали бронирования: дата={booking_date}, склад={warehouse_name}, коэф={coefficient}")
+            
+            return {
+                "booking_date": booking_date,
+                "warehouse_name": warehouse_name,
+                "coefficient": coefficient
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения деталей бронирования: {e}")
+            return {
+                "booking_date": "Ошибка",
+                "warehouse_name": "Ошибка",
+                "coefficient": "Ошибка"
+            }
+    
+    async def _find_new_supply_id(self) -> str:
+        """
+        Ищет новый ID поставки в заголовке страницы после успешного бронирования.
+        WB меняет ID поставки после брони с preorderID на supplyID.
+        
+        Returns:
+            Новый ID поставки или None если не найден
+        """
+        try:
+            logger.info("🔍 Ищу новый ID поставки в заголовке страницы...")
+            
+            # Ждем загрузки страницы после бронирования
+            await asyncio.sleep(3)
+            
+            # Селекторы для поиска заголовка "Поставка №..."
+            header_selectors = [
+                # Точный селектор из скриншота
+                'span.Text_JKIsQramuu.Text--title-l_SORyypWwPl.Text--black_hIzfx5PELf.Text--white-space-break-spaces_Ap2G-5homnx.Text--textDecoration-none_rKzIphagq0',
+                
+                # Более общие селекторы
+                'span[class*="Text_"][class*="title"]:has-text("Поставка")',
+                'span[class*="Text--title"]:has-text("Поставка")',
+                'h1:has-text("Поставка")',
+                'h2:has-text("Поставка")', 
+                'h3:has-text("Поставка")',
+                
+                # Поиск по тексту
+                'text=/Поставка №\\d+/',
+                '*:has-text("Поставка №")',
+                
+                # CSS селекторы с содержанием
+                'span:has-text("Поставка №")',
+                'div:has-text("Поставка №")',
+                
+                # Поиск в заголовках страницы
+                '[role="heading"]:has-text("Поставка")',
+                '.page-title:has-text("Поставка")',
+                '.header:has-text("Поставка")',
+            ]
+            
+            new_supply_id = None
+            
+            for selector in header_selectors:
+                try:
+                    logger.info(f"🔍 Пробую селектор: {selector}")
+                    
+                    # Ищем элементы с этим селектором
+                    elements = self.page.locator(selector)
+                    count = await elements.count()
+                    
+                    logger.info(f"📊 Найдено элементов: {count}")
+                    
+                    if count > 0:
+                        for i in range(count):
+                            element = elements.nth(i)
+                            
+                            if await element.is_visible():
+                                text = await element.text_content()
+                                logger.info(f"📝 Текст элемента {i}: '{text}'")
+                                
+                                if text and "Поставка №" in text:
+                                    # Извлекаем номер поставки
+                                    import re
+                                    match = re.search(r'Поставка №(\d+)', text)
+                                    if match:
+                                        new_supply_id = match.group(1)
+                                        logger.info(f"✅ Найден новый ID поставки: {new_supply_id}")
+                                        return new_supply_id
+                except Exception as e:
+                    logger.debug(f"Ошибка с селектором {selector}: {e}")
+                    continue
+            
+            # Если не нашли через селекторы, пробуем через page.content()
+            try:
+                logger.info("🔍 Ищу в HTML коде страницы...")
+                page_content = await self.page.content()
+                
+                import re
+                matches = re.findall(r'Поставка №(\d+)', page_content)
+                if matches:
+                    new_supply_id = matches[0]  # Берем первое совпадение
+                    logger.info(f"✅ Найден ID в HTML: {new_supply_id}")
+                    return new_supply_id
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка поиска в HTML: {e}")
+            
+            logger.warning("⚠️ Новый ID поставки не найден в заголовке")
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка поиска нового ID поставки: {e}")
+            return None
+    
+    def _parse_custom_date(self, custom_date: str) -> datetime:
+        """
+        Парсит кастомную дату из различных форматов.
+        
+        Args:
+            custom_date: Дата в формате 'DD.MM.YYYY' или 'YYYY-MM-DD'
+            
+        Returns:
+            datetime объект
+        """
+        try:
+            # Пробуем разные форматы
+            formats = ['%d.%m.%Y', '%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y']
+            
+            for fmt in formats:
+                try:
+                    parsed_date = datetime.strptime(custom_date, fmt)
+                    logger.info(f"📅 Успешно распарсили дату '{custom_date}' как {parsed_date}")
+                    return parsed_date
+                except ValueError:
+                    continue
+            
+            # Если ничего не подошло, используем дату через 3 дня
+            logger.warning(f"⚠️ Не удалось распарсить дату '{custom_date}', используем дату через 3 дня")
+            return datetime.now() + timedelta(days=3)
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка парсинга даты '{custom_date}': {e}")
+            return datetime.now() + timedelta(days=3)
+    
+    async def _find_max_coefficient_date(self, available_dates) -> datetime:
+        """
+        Ищет дату с максимальным коэффициентом среди доступных дат.
+        
+        Args:
+            available_dates: Playwright locator с доступными датами
+            
+        Returns:
+            datetime объект с датой максимального коэффициента или None
+        """
+        try:
+            logger.info("📊 Ищу дату с максимальным коэффициентом...")
+            
+            max_coefficient = 0
+            best_date = None
+            count = await available_dates.count()
+            
+            for i in range(count):
+                date_element = available_dates.nth(i)
+                
+                try:
+                    # Получаем текст даты
+                    date_text = await date_element.text_content()
+                    if not date_text:
+                        continue
+                    
+                    # Ищем коэффициент в тексте (может быть рядом с датой)
+                    coefficient_text = await self._find_coefficient_for_date(date_element)
+                    
+                    if coefficient_text:
+                        try:
+                            coefficient = float(coefficient_text.replace(',', '.'))
+                            logger.info(f"📊 Дата: {date_text}, коэффициент: {coefficient}")
+                            
+                            if coefficient > max_coefficient:
+                                max_coefficient = coefficient
+                                # Парсим дату
+                                parsed_date = self._parse_date_text(date_text)
+                                if parsed_date:
+                                    best_date = parsed_date
+                                    logger.info(f"🏆 Новый максимальный коэффициент: {coefficient} для даты {best_date}")
+                        except (ValueError, TypeError):
+                            logger.debug(f"Не удалось конвертировать коэффициент: {coefficient_text}")
+                            continue
+                            
+                except Exception as e:
+                    logger.debug(f"Ошибка обработки даты {i}: {e}")
+                    continue
+            
+            if best_date:
+                logger.info(f"🎯 Найдена лучшая дата: {best_date} с коэффициентом {max_coefficient}")
+                return best_date
+            else:
+                logger.warning("⚠️ Не найдено дат с коэффициентами")
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка поиска даты с максимальным коэффициентом: {e}")
+            return None
+    
+    async def _find_coefficient_for_date(self, date_element) -> str:
+        """
+        Ищет коэффициент для конкретной даты.
+        
+        Args:
+            date_element: Playwright element с датой
+            
+        Returns:
+            Строка с коэффициентом или None
+        """
+        try:
+            # Ищем коэффициент приёмки в различных местах относительно элемента даты
+            selectors = [
+                # Коэффициент приёмки может быть в том же элементе
+                '.coefficient',
+                '[data-testid*="coefficient"]',
+                '.coeff',
+                '*[class*="acceptance"]',      # Приёмка
+                '*[class*="logistic"]',        # Логистика  
+                '*[class*="price"]',           # Цена
+                
+                # Или в соседних элементах
+                '+ * .coefficient',
+                '+ * [data-testid*="coefficient"]',
+                '+ * *[class*="acceptance"]',
+                '+ * *[class*="logistic"]',
+                
+                # Или в родительском элементе
+                '../ .coefficient',
+                '../ [data-testid*="coefficient"]',
+                '../ *[class*="acceptance"]',
+                '../ *[class*="logistic"]',
+                
+                # Или в дочерних элементах
+                './/*[class*="acceptance"]',
+                './/*[class*="logistic"]',
+                './/*[contains(text(), "×")]',    # Поиск по символу умножения
+                './/*[contains(text(), "₽")]',    # Поиск по рублям
+            ]
+            
+            # Сначала наводим мышку на элемент даты для активации hover-эффектов
+            try:
+                await date_element.hover(timeout=2000, force=True)
+                await asyncio.sleep(0.3)  # Даём время на появление hover-элементов
+            except Exception as hover_error:
+                logger.warning(f"⚠️ Ошибка наведения на дату: {hover_error}")
+                # Продолжаем без наведения
+            
+            for selector in selectors:
+                try:
+                    coeff_element = date_element.locator(selector).first
+                    if await coeff_element.is_visible():
+                        coeff_text = await coeff_element.text_content()
+                        logger.debug(f"🔍 Найден элемент с текстом: '{coeff_text}' через селектор: {selector}")
+                        
+                        if coeff_text and any(char.isdigit() for char in coeff_text):
+                            # Проверяем паттерны приёмки
+                            import re
+                            patterns = [
+                                r'×(\d+(?:[.,]\d+)?)',                    # ×2, ×1.5
+                                r'приём[а-я]*[:\s]*(\d+(?:[.,]\d+)?)',   # приёмка: 2
+                                r'(\d+(?:[.,]\d+)?)\s*≈\s*∼\s*\d+[.,]?\d*\s*₽',  # 2 ≈ ∼ 3,98 ₽
+                                r'(\d+(?:[.,]\d+)?)\s*∼\s*\d+[.,]?\d*\s*₽',      # 2 ∼ 3,98 ₽
+                                r'(\d+(?:[.,]\d+)?)%',                   # 200%
+                                r'(\d+(?:[.,]\d+)?)',                    # Любое число
+                            ]
+                            
+                            for pattern in patterns:
+                                match = re.search(pattern, coeff_text, re.IGNORECASE)
+                                if match:
+                                    coefficient_value = match.group(1)
+                                    logger.info(f"🎯 Найден коэффициент приёмки: {coefficient_value} в тексте: '{coeff_text}'")
+                                    return coefficient_value
+                except Exception as e:
+                    logger.debug(f"Ошибка поиска через селектор {selector}: {e}")
+                    continue
+            
+            # Ищем в тексте самого элемента даты
+            element_text = await date_element.text_content()
+            logger.debug(f"🔍 Текст элемента даты: '{element_text}'")
+            
+            # Также ищем в родительском элементе (может содержать информацию о приёмке)
+            parent_element = date_element.locator('..')
+            parent_text = ""
+            try:
+                parent_text = await parent_element.text_content()
+                logger.debug(f"🔍 Текст родительского элемента: '{parent_text}'")
+            except:
+                pass
+            
+            # Объединяем тексты для поиска
+            combined_text = f"{element_text} {parent_text}"
+            
+            if combined_text:
+                import re
+                # Ищем паттерны ПРИЁМКИ, ИСКЛЮЧАЯ логистику и хранение
+                patterns = [
+                    # ПРИОРИТЕТ: ищем коэффициенты рядом с acceptance/freeAcceptance
+                    r'common-translates\.acceptance.*?(\d+(?:[.,]\d+)?)',  # common-translates.acceptance + число
+                    r'freeAcceptance.*?(\d+(?:[.,]\d+)?)',                 # freeAcceptance + число  
+                    r'choose-date\.freeAcceptance.*?(\d+(?:[.,]\d+)?)',    # choose-date.freeAcceptance + число
+                    
+                    # Классические паттерны приёмки
+                    r'×(\d+(?:[.,]\d+)?)',                    # ×2, ×1.5
+                    r'коэф[:\s]*(\d+(?:[.,]\d+)?)',          # коэф: 1.5
+                    r'приём[а-я]*[:\s]*(\d+(?:[.,]\d+)?)',   # приёмка: 2
+                    r'(\d+(?:[.,]\d+)?)\s*≈\s*∼\s*\d+[.,]?\d*\s*₽',  # 2 ≈ ∼ 3,98 ₽
+                    r'(\d+(?:[.,]\d+)?)\s*∼\s*\d+[.,]?\d*\s*₽',      # 2 ∼ 3,98 ₽
+                    r'\((\d+(?:[.,]\d+)?)\)',                # (2)
+                    
+                    # ИСКЛЮЧАЕМ logisticDescription и storageDescription!!!
+                    # Ищем % только если НЕТ logistic/storage рядом
+                ]
+                
+                # Сначала проверяем БЕСПЛАТНУЮ приёмку
+                if 'freeAcceptance' in combined_text or 'common-translates.acceptance' in combined_text:
+                    # Если есть маркеры бесплатной приёмки, коэффициент = 0
+                    if 'choose-date.freeAcceptance' in combined_text:
+                        logger.info(f"🎯 Найдена БЕСПЛАТНАЯ приёмка (choose-date.freeAcceptance)! Коэффициент = 0")
+                        return "0"
+                    elif 'common-translates.acceptance' in combined_text and 'logisticDescription' not in combined_text:
+                        logger.info(f"🎯 Найдена БЕСПЛАТНАЯ приёмка (common-translates.acceptance)! Коэффициент = 0")
+                        return "0"
+                
+                # КРИТИЧНО: исключаем любые коэффициенты из logistic и storage
+                if 'logisticDescription' in combined_text or 'storageDescription' in combined_text:
+                    logger.warning(f"⚠️ Найдены маркеры логистики/хранения - пропускаем: {combined_text[:100]}...")
+                    return None
+                
+                for pattern in patterns:
+                    match = re.search(pattern, combined_text, re.IGNORECASE)
+                    if match:
+                        coefficient_value = match.group(1)
+                        logger.info(f"🎯 Найден коэффициент приёмки: {coefficient_value} из: '{combined_text}'")
+                        return coefficient_value
+            
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Ошибка поиска коэффициента: {e}")
+            return None
+    
+    def _parse_date_text(self, date_text: str) -> datetime:
+        """
+        Парсит текст даты в datetime объект.
+        
+        Args:
+            date_text: Текст с датой
+            
+        Returns:
+            datetime объект или None
+        """
+        try:
+            # Возможные форматы дат в интерфейсе WB
+            patterns = [
+                r'(\d{1,2})\s+(\w+)',  # "18 сентября"
+                r'(\d{1,2})\.(\d{1,2})\.(\d{4})',  # "18.09.2024"
+                r'(\d{1,2})/(\d{1,2})/(\d{4})',  # "18/09/2024"
+                r'(\d{1,2})-(\d{1,2})-(\d{4})',  # "18-09-2024"
+            ]
+            
+            current_year = datetime.now().year
+            
+            for pattern in patterns:
+                match = re.search(pattern, date_text)
+                if match:
+                    if len(match.groups()) == 2:  # день и месяц словами
+                        day = int(match.group(1))
+                        month_name = match.group(2).lower()
+                        
+                        # Словарь месяцев на русском
+                        months = {
+                            'января': 1, 'февраля': 2, 'марта': 3, 'апреля': 4,
+                            'мая': 5, 'июня': 6, 'июля': 7, 'августа': 8,
+                            'сентября': 9, 'октября': 10, 'ноября': 11, 'декабря': 12
+                        }
+                        
+                        for month_text, month_num in months.items():
+                            if month_text in month_name:
+                                return datetime(current_year, month_num, day)
+                    
+                    elif len(match.groups()) == 3:  # день.месяц.год
+                        day = int(match.group(1))
+                        month = int(match.group(2))
+                        year = int(match.group(3))
+                        return datetime(year, month, day)
+            
+            logger.warning(f"⚠️ Не удалось распарсить дату: {date_text}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка парсинга текста даты '{date_text}': {e}")
+            return None
+    
+    async def _find_coefficient_for_specific_date(self, target_date: datetime, available_dates) -> float:
+        """
+        Ищет коэффициент для конкретной выбранной даты.
+        
+        Args:
+            target_date: Целевая дата для поиска коэффициента
+            available_dates: Playwright locator с доступными датами
+            
+        Returns:
+            float коэффициент или None если не найден
+        """
+        try:
+            logger.info(f"📊 Ищу коэффициент для конкретной даты: {target_date.strftime('%d.%m.%Y')}")
+            
+            count = await available_dates.count()
+            
+            for i in range(count):
+                date_element = available_dates.nth(i)
+                
+                try:
+                    # Получаем текст даты
+                    date_text = await date_element.text_content()
+                    if not date_text:
+                        continue
+                    
+                    # Парсим дату из текста
+                    parsed_date = self._parse_date_text(date_text)
+                    if not parsed_date:
+                        continue
+                    
+                    # Проверяем соответствие даты
+                    if (parsed_date.day == target_date.day and 
+                        parsed_date.month == target_date.month and 
+                        parsed_date.year == target_date.year):
+                        
+                        logger.info(f"✅ Найдена нужная дата: {date_text}")
+                        
+                        # Ищем коэффициент в этой дате
+                        coefficient_text = await self._find_coefficient_for_date(date_element)
+                        
+                        if coefficient_text:
+                            try:
+                                coefficient = float(coefficient_text.replace(',', '.'))
+                                logger.info(f"🎯 Коэффициент для даты {target_date.strftime('%d.%m.%Y')}: {coefficient}")
+                                return coefficient
+                            except (ValueError, TypeError):
+                                logger.warning(f"⚠️ Не удалось распарсить коэффициент: {coefficient_text}")
+                                continue
+                        else:
+                            logger.warning(f"⚠️ Коэффициент не найден для даты {target_date.strftime('%d.%m.%Y')}")
+                            return None
+                            
+                except Exception as e:
+                    logger.debug(f"Ошибка обработки даты {i}: {e}")
+                    continue
+            
+            logger.warning(f"⚠️ Дата {target_date.strftime('%d.%m.%Y')} не найдена в календаре")
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка поиска коэффициента для даты {target_date.strftime('%d.%m.%Y')}: {e}")
+            return None
+    
+    async def _find_coefficient_date(self, target_coefficient: float, available_dates) -> datetime:
+        """
+        Ищет дату с коэффициентом меньше или равным указанному.
+        
+        Args:
+            target_coefficient: Максимальный допустимый коэффициент
+            available_dates: Playwright locator с доступными датами
+            
+        Returns:
+            datetime объект с подходящим коэффициентом или None
+        """
+        try:
+            logger.info(f"📊 Ищу дату с коэффициентом <= {target_coefficient}...")
+            
+            count = await available_dates.count()
+            best_date = None
+            best_coefficient = float('inf')  # Начинаем с бесконечности
+            
+            for i in range(count):
+                date_element = available_dates.nth(i)
+                
+                try:
+                    # Получаем текст даты
+                    date_text = await date_element.text_content()
+                    if not date_text:
+                        continue
+                    
+                    # Ищем коэффициент в тексте даты
+                    coefficient_text = await self._find_coefficient_for_date(date_element)
+                    
+                    if coefficient_text:
+                        try:
+                            coefficient = float(coefficient_text.replace(',', '.'))
+                            
+                            # Проверяем что коэффициент <= целевого
+                            if coefficient <= target_coefficient:
+                                parsed_date = self._parse_date_text(date_text)
+                                if parsed_date:
+                                    # Выбираем дату с наименьшим подходящим коэффициентом
+                                    if coefficient < best_coefficient:
+                                        best_coefficient = coefficient
+                                        best_date = parsed_date
+                                        logger.info(f"✅ Новая лучшая дата с коэффициентом {coefficient}: {parsed_date}")
+                            else:
+                                logger.debug(f"⚠️ Коэффициент {coefficient} больше целевого {target_coefficient}")
+                            
+                        except (ValueError, TypeError):
+                            continue
+                            
+                except Exception as e:
+                    logger.debug(f"Ошибка обработки даты {i}: {e}")
+                    continue
+            
+            # Особая обработка для бесплатного коэффициента (0)
+            if target_coefficient >= 0 and best_date is None:
+                logger.info("🔍 Ищу бесплатные слоты...")
+                page_content = await self.page.content()
+                if "бесплатно" in page_content.lower() or "free" in page_content.lower():
+                    # Возвращаем первую доступную дату для бесплатного слота
+                    first_element = available_dates.first
+                    if await first_element.count() > 0:
+                        first_date_text = await first_element.text_content()
+                        if first_date_text:
+                            parsed_date = self._parse_date_text(first_date_text)
+                            if parsed_date:
+                                logger.info(f"✅ Найден бесплатный слот на дату: {parsed_date}")
+                                return parsed_date
+            
+            if best_date:
+                logger.info(f"✅ Выбрана лучшая дата с коэффициентом {best_coefficient}: {best_date}")
+                return best_date
+            else:
+                logger.warning(f"⚠️ Дата с коэффициентом <= {target_coefficient} не найдена")
+                return None
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка поиска даты с коэффициентом <= {target_coefficient}: {e}")
+            return None
+    
+    async def _find_suitable_date_from_list(self, selected_dates: list, target_coefficient: float, available_dates) -> datetime:
+        """
+        Ищет подходящую дату из списка выбранных пользователем дат.
+        Проверяет коэффициент только для выбранных дат и возвращает дату где коэффициент <= целевого.
+        
+        Args:
+            selected_dates: Список дат в формате 'DD.MM.YYYY' выбранных пользователем
+            target_coefficient: Максимальный допустимый коэффициент
+            available_dates: Playwright locator с доступными датами
+            
+        Returns:
+            datetime объект подходящей даты или None
+        """
+        try:
+            logger.info(f"📊 Ищу подходящую дату из списка {selected_dates} с коэффициентом <= {target_coefficient}...")
+            
+            best_date = None
+            best_coefficient = float('inf')
+            
+            # Проверяем каждую выбранную дату
+            for date_str in selected_dates:
+                try:
+                    # Парсим дату (используем существующий метод)
+                    target_date = self._parse_custom_date(date_str)
+                    if not target_date:
+                        logger.warning(f"⚠️ Не удалось распарсить дату: {date_str}")
+                        continue
+                    
+                    # Ищем коэффициент для этой конкретной даты
+                    actual_coefficient = await self._find_coefficient_for_specific_date(target_date, available_dates)
+                    
+                    if actual_coefficient is not None:
+                        logger.info(f"📊 Дата {date_str}: коэффициент {actual_coefficient}")
+                        
+                        # Проверяем что коэффициент <= целевого
+                        if actual_coefficient <= target_coefficient:
+                            # Выбираем дату с наименьшим подходящим коэффициентом
+                            if actual_coefficient < best_coefficient:
+                                best_coefficient = actual_coefficient
+                                best_date = target_date
+                                logger.info(f"✅ Новая лучшая дата: {date_str} с коэффициентом {actual_coefficient}")
+                        else:
+                            logger.info(f"❌ Дата {date_str}: коэффициент {actual_coefficient} > {target_coefficient}")
+                    else:
+                        logger.warning(f"⚠️ Не удалось найти коэффициент для даты {date_str}")
+                        
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка обработки даты {date_str}: {e}")
+                    continue
+            
+            if best_date:
+                logger.info(f"🎯 Выбрана лучшая дата из списка: {best_date.strftime('%d.%m.%Y')} с коэффициентом {best_coefficient}")
+                return best_date
+            else:
+                logger.warning(f"⚠️ Среди выбранных дат нет подходящих с коэффициентом <= {target_coefficient}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка поиска подходящей даты из списка: {e}")
+            return None
+    
     async def _human_type(self, selector: str, text: str, delay_range: tuple = (50, 150)):
         """Человеческий ввод текста с вариативными задержками."""
         element = await self.page.wait_for_selector(selector, timeout=10000)
@@ -723,8 +1475,12 @@ class WBBrowserAutomationPro:
         element = await self.page.wait_for_selector(selector, timeout=1000)
         
         # Наводим мышь на элемент
-        await element.hover()
-        await asyncio.sleep(random.uniform(0.1, 0.3))
+        try:
+            await element.hover(timeout=2000, force=True)
+            await asyncio.sleep(random.uniform(0.1, 0.3))
+        except Exception as hover_error:
+            logger.warning(f"⚠️ Ошибка наведения: {hover_error}")
+            # Продолжаем без наведения
         
         # Кликаем
         await element.click()
@@ -2316,7 +3072,7 @@ class WBBrowserAutomationPro:
             logger.error(f"❌ Ошибка создания скриншота: {e}")
             return False
     
-    async def book_supply_by_id(self, supply_id: str, preorder_id: str = None, min_hours_ahead: int = 80) -> Dict[str, Any]:
+    async def book_supply_by_id(self, supply_id: str, preorder_id: str = None, min_hours_ahead: int = 80, custom_date: str = None, use_max_coefficient: bool = False, target_coefficient: float = None, selected_dates: list = None) -> Dict[str, Any]:
         """
         ОХУЕННОЕ бронирование поставки по ID через прямую ссылку.
         
@@ -2324,9 +3080,13 @@ class WBBrowserAutomationPro:
             supply_id: ID поставки для бронирования
             preorder_id: ID предзаказа (опционально)
             min_hours_ahead: минимальное количество часов вперед для бронирования (по умолчанию 80)
+            custom_date: Кастомная дата для бронирования (формат: 'DD.MM.YYYY' или 'YYYY-MM-DD')
+            use_max_coefficient: Если True, выбирает дату с максимальным коэффициентом
+            target_coefficient: Максимальный допустимый коэффициент (ищет коэффициент <= этого значения)
+            selected_dates: Список дат выбранных пользователем для проверки коэффициента
         
         Returns:
-            Dict с результатом бронирования
+            Dict с результатом бронирования, включая детали (дата, склад, коэффициент)
         """
         result = {
             "success": False,
@@ -2354,14 +3114,34 @@ class WBBrowserAutomationPro:
             
             logger.info(f"🔗 Перехожу по прямой ссылке: {supply_url}")
             
-            response = await self.page.goto(supply_url, wait_until="domcontentloaded", timeout=30000)
-            await asyncio.sleep(3)  # Даем странице полностью загрузиться
+            response = await self.page.goto(supply_url, wait_until="networkidle", timeout=30000)
+            await asyncio.sleep(8)  # БЛЯДЬ! НАМНОГО БОЛЬШЕ ВРЕМЕНИ для React приложения!
             
             if not response or response.status != 200:
                 result["message"] = f"❌ Не удалось открыть страницу поставки (статус: {response.status if response else 'нет ответа'})"
                 return result
             
             logger.info("✅ Страница поставки загружена")
+            
+            # АКТИВНОЕ ОЖИДАНИЕ ЗАГРУЗКИ REACT ПРИЛОЖЕНИЯ!
+            logger.info("⏳ Жду полной загрузки React приложения...")
+            
+            react_loaded = False
+            for attempt in range(20):  # 20 попыток по 1 секунде = 20 секунд максимум
+                await asyncio.sleep(1)
+                
+                # Проверяем что React приложение загрузилось
+                react_elements = await self.page.locator('button, [class*="button"], [data-testid]').count()
+                
+                if react_elements > 10:  # Достаточно элементов = приложение загрузилось
+                    react_loaded = True
+                    logger.info(f"🎯 REACT ЗАГРУЗИЛСЯ! Попытка {attempt + 1}, найдено элементов: {react_elements}")
+                    break
+                else:
+                    logger.info(f"⏳ React еще грузится... Попытка {attempt + 1}/20, найдено элементов: {react_elements}")
+            
+            if not react_loaded:
+                logger.warning("⚠️ React приложение так и не загрузилось полностью за 20 секунд!")
             
             # Блокируем аналитику и детекцию автоматизации WB
             await self.page.evaluate("""
@@ -2489,8 +3269,8 @@ class WBBrowserAutomationPro:
                         
                         # Переходим на нужную поставку заново
                         supply_url = f"https://seller.wildberries.ru/supplies-management/all?query={supply_id}"
-                        await self.page.goto(supply_url, wait_until='domcontentloaded')
-                        await asyncio.sleep(2)
+                        await self.page.goto(supply_url, wait_until='networkidle')
+                        await asyncio.sleep(10)  # БЛЯДЬ! ЕЩЕ БОЛЬШЕ ВРЕМЕНИ после перезагрузки!
                         
                         logger.info("✅ Состояние страницы успешно сброшено")
                         
@@ -2604,8 +3384,12 @@ class WBBrowserAutomationPro:
                     """)
                     
                     # Сначала наводимся на кнопку (как человек)
-                    await book_button.hover()
-                    await asyncio.sleep(random.uniform(0.1, 0.3))
+                    try:
+                        await book_button.hover(timeout=2000, force=True)
+                        await asyncio.sleep(random.uniform(0.1, 0.3))
+                    except Exception as hover_error:
+                        logger.warning(f"⚠️ Ошибка наведения на кнопку бронирования: {hover_error}")
+                        # Продолжаем без наведения
                     
                     # Прокручиваем к кнопке если нужно
                     await book_button.scroll_into_view_if_needed()
@@ -2765,7 +3549,7 @@ class WBBrowserAutomationPro:
                     logger.warning("⚠️ Календарь не появился, но продолжаю искать даты...")
                 
                 # Шаг 4: Ищем доступные даты в popup окне
-                await asyncio.sleep(3)  # Даем больше времени на загрузку дат в popup
+                await asyncio.sleep(2)  # УМЕНЬШИЛ С 3 ДО 2 СЕКУНД!
                 
                 # Ищем доступные даты для бронирования
                 date_found = False
@@ -2816,8 +3600,52 @@ class WBBrowserAutomationPro:
                                 except:
                                     pass
                             
-                            # БЛЯДЬ! НЕ МИНИМАЛЬНУЮ, А ТОЧНУЮ ДАТУ ЧЕРЕЗ 3 ДНЯ!
-                            target_date = datetime.now() + timedelta(days=3)
+                            # ОПРЕДЕЛЯЕМ ЦЕЛЕВУЮ ДАТУ
+                            if selected_dates and target_coefficient is not None:
+                                # Новая логика: ищем подходящую дату из списка выбранных пользователем
+                                target_date = await self._find_suitable_date_from_list(selected_dates, target_coefficient, available_dates)
+                                if not target_date:
+                                    result["message"] = f"❌ Среди выбранных дат нет подходящих с коэффициентом <= {target_coefficient}"
+                                    return result
+                                logger.info(f"🎯 Выбрана дата из списка пользователя: {target_date}")
+                            elif custom_date:
+                                # Парсим кастомную дату
+                                target_date = self._parse_custom_date(custom_date)
+                                logger.info(f"📅 Используем кастомную дату: {custom_date} -> {target_date}")
+                                
+                                # Если указан коэффициент, проверяем его для выбранной даты
+                                if target_coefficient is not None:
+                                    actual_coefficient = await self._find_coefficient_for_specific_date(target_date, available_dates)
+                                    if actual_coefficient is not None:
+                                        if actual_coefficient > target_coefficient:
+                                            logger.warning(f"❌ Коэффициент для даты {target_date.strftime('%d.%m.%Y')} слишком высокий: {actual_coefficient} > {target_coefficient}")
+                                            result["message"] = f"❌ Коэффициент для выбранной даты ({actual_coefficient}) превышает допустимый ({target_coefficient})"
+                                            return result
+                                        else:
+                                            logger.info(f"✅ Коэффициент для даты {target_date.strftime('%d.%m.%Y')} подходит: {actual_coefficient} <= {target_coefficient}")
+                                    else:
+                                        logger.warning(f"⚠️ Не удалось найти коэффициент для даты {target_date.strftime('%d.%m.%Y')}")
+                            elif target_coefficient is not None:
+                                # Ищем дату с коэффициентом <= указанного
+                                target_date = await self._find_coefficient_date(target_coefficient, available_dates)
+                                if not target_date:
+                                    # Если не нашли с нужным коэффициентом, используем дату через 3 дня
+                                    target_date = datetime.now() + timedelta(days=3)
+                                    logger.warning(f"⚠️ Дата с коэффициентом <= {target_coefficient} не найдена, используем стандартную: {target_date}")
+                                else:
+                                    logger.info(f"📊 Найдена дата с подходящим коэффициентом: {target_date}")
+                            elif use_max_coefficient:
+                                # Найдем дату с максимальным коэффициентом
+                                target_date = await self._find_max_coefficient_date(available_dates)
+                                if not target_date:
+                                    # Если не нашли с коэффициентом, используем дату через 3 дня
+                                    target_date = datetime.now() + timedelta(days=3)
+                                logger.info(f"📊 Используем дату с максимальным коэффициентом: {target_date}")
+                            else:
+                                # По умолчанию: через 3 дня
+                                target_date = datetime.now() + timedelta(days=3)
+                                logger.info(f"🎯 Используем стандартную дату (через 3 дня): {target_date}")
+                            
                             target_day = target_date.day
                             target_month = target_date.month
                             target_year = target_date.year
@@ -2896,8 +3724,12 @@ class WBBrowserAutomationPro:
                                 
                                 # КРИТИЧЕСКИ ВАЖНО: кнопка появляется только при hover на дату!
                                 logger.info(f"🖱️ Навожу мышь на дату: {date_text}")
-                                await date_element.hover()
-                                await asyncio.sleep(0.5)  # Увеличиваем время ожидания появления кнопки
+                                try:
+                                    await date_element.hover(timeout=3000, force=True)
+                                    await asyncio.sleep(0.5)  # Увеличиваем время ожидания появления кнопки
+                                except Exception as hover_error:
+                                    logger.warning(f"⚠️ Ошибка наведения на дату {date_text}: {hover_error}")
+                                    continue  # Пропускаем эту дату
                                 
                                 # Ждем появления кнопки "Выбрать" с несколькими попытками
                                 select_button = None
@@ -2928,8 +3760,12 @@ class WBBrowserAutomationPro:
                                 # Ждем появления кнопки с множественными попытками hover
                                 for attempt in range(6):  # Больше попыток
                                     # Повторяем hover каждую попытку - кнопка может исчезнуть
-                                    await date_element.hover()
-                                    await asyncio.sleep(0.5)  # Время для появления кнопки
+                                    try:
+                                        await date_element.hover(timeout=2000, force=True)
+                                        await asyncio.sleep(0.5)  # Время для появления кнопки
+                                    except Exception as hover_error:
+                                        logger.warning(f"⚠️ Ошибка повторного наведения на попытке {attempt + 1}: {hover_error}")
+                                        continue
                                     
                                     # Проверяем все селекторы
                                     for sel in select_selectors:
@@ -2966,8 +3802,12 @@ class WBBrowserAutomationPro:
                                     logger.info("🔍 Анализирую DOM структуру после hover...")
                                     
                                     # Еще один hover для активации
-                                    await date_element.hover()
-                                    await asyncio.sleep(1.0)
+                                    try:
+                                        await date_element.hover(timeout=2000, force=True)
+                                        await asyncio.sleep(0.3)  # УМЕНЬШИЛ С 1.0 ДО 0.3 СЕКУНДЫ!
+                                    except Exception as hover_error:
+                                        logger.warning(f"⚠️ Ошибка финального наведения: {hover_error}")
+                                        # Продолжаем без наведения
                                     
                                     # Ищем все кнопки, которые появились после hover
                                     dom_analysis = await self.page.evaluate("""
@@ -3238,8 +4078,26 @@ class WBBrowserAutomationPro:
                         return result
                 
                 # Шаг 5: Ждем появления кнопки "Запланировать" после клика на "Выбрать"
-                logger.info("⏳ Жду появления кнопки 'Запланировать' после выбора даты...")
-                await asyncio.sleep(3)  # Больше времени для загрузки интерфейса
+                logger.info("⏳ ДОЛГО жду появления кнопки 'Запланировать' после выбора даты...")
+                
+                # БЛЯДЬ! ДЕЛАЮ АКТИВНОЕ ОЖИДАНИЕ ПОЯВЛЕНИЯ КНОПКИ!
+                confirm_button_appeared = False
+                for attempt in range(15):  # 15 попыток по 1 секунде = 15 секунд максимум
+                    await asyncio.sleep(1)
+                    
+                    # Проверяем есть ли кнопка "Запланировать"
+                    test_buttons = self.page.locator('button:has-text("Запланировать"), button:has-text("Забронировать"), span:has-text("Запланировать")')
+                    button_count = await test_buttons.count()
+                    
+                    if button_count > 0:
+                        confirm_button_appeared = True
+                        logger.info(f"🎯 НАШЕЛ КНОПКУ! Попытка {attempt + 1}, найдено кнопок: {button_count}")
+                        break
+                    else:
+                        logger.info(f"⏳ Попытка {attempt + 1}/15 - кнопка еще не появилась...")
+                
+                if not confirm_button_appeared:
+                    logger.warning("⚠️ Кнопка 'Запланировать' так и не появилась за 15 секунд!")
                 
                 confirm_button = None
                 confirm_texts = [
@@ -3513,6 +4371,10 @@ class WBBrowserAutomationPro:
                     # Просто обычный клик
                     await confirm_button.click()
                     logger.info("✅ Нажал кнопку подтверждения обычным способом")
+                    
+                    # БОЛЬШЕ ВРЕМЕНИ ПОСЛЕ КЛИКА ДЛЯ ОБРАБОТКИ НА СЕРВЕРЕ WB!
+                    logger.info("⏳ Жду ответа от сервера WB после клика...")
+                    await asyncio.sleep(8)  # ДОБАВЛЯЮ 8 СЕКУНД ПОСЛЕ КЛИКА!
                 
                 except Exception as click_error:
                     logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА при бронировании: {click_error}")
@@ -3537,6 +4399,26 @@ class WBBrowserAutomationPro:
                     logger.info(f"🎉 БРОНИРОВАНИЕ УСПЕШНО! {booking_result['message']}")
                     result["success"] = True
                     result["message"] = booking_result["message"]
+                    
+                    # КРИТИЧНО! ПОСЛЕ БРОНИ WB МЕНЯЕТ ID ПОСТАВКИ!
+                    # Ищем новый ID в заголовке страницы
+                    new_supply_id = await self._find_new_supply_id()
+                    if new_supply_id:
+                        logger.info(f"🆔 Найден новый ID поставки после брони: {new_supply_id}")
+                        
+                        # ДОБАВЛЯЕМ ДЕТАЛИ БРОНИРОВАНИЯ С НОВЫМ ID
+                        booking_details = await self._get_booking_details(new_supply_id)
+                        if booking_details:
+                            result.update(booking_details)
+                            # Добавляем новый ID в результат
+                            result["new_supply_id"] = new_supply_id
+                    else:
+                        logger.warning(f"⚠️ Не найден новый ID поставки, используем старый: {supply_id}")
+                        # FALLBACK: используем старый ID
+                        booking_details = await self._get_booking_details(supply_id)
+                        if booking_details:
+                            result.update(booking_details)
+                    
                     return result
                 elif booking_result["retry"]:
                     logger.warning(f"⚠️ Нужна повторная попытка: {booking_result['message']}")

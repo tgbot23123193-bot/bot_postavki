@@ -5,14 +5,29 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.filters import StateFilter
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 import asyncio
 
 from ...utils.logger import get_logger
+from ...utils.calendar_utils import TelegramCalendar, parse_calendar_callback
 from ...services.wb_supplies_api import WBSuppliesAPIClient
 from ...services.browser_manager import browser_manager
 # Removed user_api_keys - using PostgreSQL database only
+
+def escape_html(text: str) -> str:
+    """Безопасное экранирование HTML символов."""
+    if not text:
+        return text
+    # Экранируем все проблемные символы для HTML
+    text = str(text)
+    text = text.replace('&', '&amp;')  # Сначала &
+    text = text.replace('<', '&lt;')   # Потом <
+    text = text.replace('>', '&gt;')   # Потом >
+    text = text.replace('"', '&quot;') # Кавычки
+    text = text.replace("'", '&#39;')  # Одинарные кавычки
+    return text
 
 async def safe_edit_text(message, text, **kwargs):
     """Безопасное редактирование сообщения с обработкой ошибки 'message is not modified'."""
@@ -21,6 +36,17 @@ async def safe_edit_text(message, text, **kwargs):
     except Exception as e:
         if "message is not modified" not in str(e):
             logger.warning(f"⚠️ Ошибка редактирования сообщения: {e}")
+            # Попробуем без HTML форматирования при ошибке parse entities
+            if "can't parse entities" in str(e) and kwargs.get("parse_mode") == "HTML":
+                try:
+                    # Убираем HTML разметку и отправляем как обычный текст
+                    import re
+                    clean_text = re.sub(r'<[^>]+>', '', text)  # Убираем все HTML теги
+                    kwargs_copy = kwargs.copy()
+                    kwargs_copy.pop("parse_mode", None)
+                    await message.edit_text(clean_text, **kwargs_copy)
+                except Exception as e2:
+                    logger.error(f"❌ Критическая ошибка отправки сообщения: {e2}")
 from ..keyboards.inline import back_to_main_menu_keyboard
 
 logger = get_logger(__name__)
@@ -280,7 +306,7 @@ async def process_date_range(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             f"❌ <b>Ошибка получения складов</b>\n\n"
             f"Не удалось загрузить список складов:\n"
-            f"<code>{str(e)}</code>",
+            f"<code>{escape_html(str(e))}</code>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data="back_to_supply")],
@@ -394,12 +420,527 @@ async def browser_book_supply(callback: CallbackQuery, state: FSMContext):
         logger.warning(f"⚠️ preorderId не найден для поставки {supply_id}, используем supply_id")
         preorder_id = supply_id
     
+    # Показываем варианты бронирования
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📅 Выбрать дату", callback_data=f"select_date_{supply_id}_{preorder_id}")],
+        [InlineKeyboardButton(text="💰 Выбрать коэффициент", callback_data=f"select_coefficient_{supply_id}_{preorder_id}")],
+        [InlineKeyboardButton(text="📊 Максимальный коэффициент", callback_data=f"max_coeff_{supply_id}_{preorder_id}")],
+        [InlineKeyboardButton(text="⚡ Быстрое бронирование (через 3 дня)", callback_data=f"quick_book_{supply_id}_{preorder_id}")],
+        [InlineKeyboardButton(text="🔙 Назад к поставкам", callback_data="view_supplies")]
+    ])
+    
     await safe_edit_text(
         callback.message,
-        f"🤖 <b>Запускаю автоматическое бронирование...</b>\n\n"
+        f"📦 <b>ВАРИАНТЫ БРОНИРОВАНИЯ</b>\n\n"
         f"📦 <b>{supply_name}</b>\n"
         f"🆔 ID: <code>{supply_id}</code>\n"
         f"📋 Заказ: <code>{preorder_id}</code>\n\n"
+        f"🎯 <b>Выберите способ бронирования:</b>\n\n"
+        f"📅 <b>Выбрать дату</b> - Укажите конкретную дату\n"
+        f"💰 <b>Выбрать коэффициент</b> - Выберите коэффициент от 1 до 20 или бесплатно\n"
+        f"📊 <b>Максимальный коэффициент</b> - Автоматически найдем лучший коэффициент\n"
+        f"⚡ <b>Быстрое бронирование</b> - Стандартно через 3 дня",
+        parse_mode="HTML",
+        reply_markup=keyboard
+    )
+
+
+# Обработчик быстрого бронирования (через 3 дня)
+@router.callback_query(F.data.startswith("quick_book_"))
+async def quick_book_handler(callback: CallbackQuery, state: FSMContext):
+    """Быстрое бронирование поставки через 3 дня."""
+    parts = callback.data.split("_")
+    supply_id = parts[2]
+    preorder_id = parts[3]
+    
+    await _execute_booking(callback, state, supply_id, preorder_id, "quick")
+
+
+# Обработчик бронирования с максимальным коэффициентом
+@router.callback_query(F.data.startswith("max_coeff_"))
+async def max_coeff_handler(callback: CallbackQuery, state: FSMContext):
+    """Бронирование поставки с максимальным коэффициентом."""
+    parts = callback.data.split("_")
+    supply_id = parts[2]
+    preorder_id = parts[3]
+    
+    await _execute_booking(callback, state, supply_id, preorder_id, "max_coeff")
+
+
+# Обработчик выбора коэффициента (показ меню)
+@router.callback_query(F.data.startswith("select_coefficient_"))
+async def select_coefficient_handler(callback: CallbackQuery, state: FSMContext, multi_booking: bool = False):
+    """Показывает меню выбора коэффициента."""
+    if not multi_booking:
+        parts = callback.data.split("_")
+        supply_id = parts[2]
+        preorder_id = parts[3]
+        
+        # Сохраняем данные в состояние
+        await state.update_data({
+            "booking_supply_id": supply_id,
+            "booking_preorder_id": preorder_id
+        })
+    else:
+        supply_id = "multi"
+        preorder_id = "multi"
+    
+    # Создаем клавиатуру с коэффициентами 1-20
+    keyboard = []
+    
+    # Добавляем кнопки для коэффициентов 1-10 (по 5 в ряду)
+    for row_start in range(1, 11, 5):
+        row = []
+        for coeff in range(row_start, min(row_start + 5, 11)):
+            row.append(InlineKeyboardButton(
+                text=f"📊 {coeff}",
+                callback_data=f"coeff_select_{coeff}_{supply_id}_{preorder_id}"
+            ))
+        keyboard.append(row)
+    
+    # Добавляем кнопки для коэффициентов 11-20 (по 5 в ряду)
+    for row_start in range(11, 21, 5):
+        row = []
+        for coeff in range(row_start, min(row_start + 5, 21)):
+            row.append(InlineKeyboardButton(
+                text=f"📊 {coeff}",
+                callback_data=f"coeff_select_{coeff}_{supply_id}_{preorder_id}"
+            ))
+        keyboard.append(row)
+    
+    # Специальная кнопка для бесплатной брони (коэффициент 0)
+    keyboard.append([
+        InlineKeyboardButton(
+            text="🆓 Бесплатная бронь",
+            callback_data=f"coeff_select_0_{supply_id}_{preorder_id}"
+        )
+    ])
+    
+    # Кнопка назад
+    if multi_booking:
+        keyboard.append([
+            InlineKeyboardButton(text="⬅️ Назад", callback_data="start_multi_booking")
+        ])
+    else:
+        keyboard.append([
+            InlineKeyboardButton(text="⬅️ Назад", callback_data=f"book_supply:{supply_id}")
+        ])
+    
+    title = "🎯 Выбор коэффициента для мультибронирования" if multi_booking else "📊 Выбор коэффициента"
+    
+    await callback.message.edit_text(
+        f"{title}\n\n"
+        f"Выберите максимальный коэффициент приёмки:\n"
+        f"• Бот найдет дату с коэффициентом ≤ выбранного\n"
+        f"• Чем меньше коэффициент, тем дешевле\n"
+        f"• 🆓 Бесплатная бронь = коэффициент 0",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
+    )
+
+
+# Обработчик выбора даты (показ календаря)
+@router.callback_query(F.data.startswith("select_date_"))
+async def select_date_handler(callback: CallbackQuery, state: FSMContext, multi_booking: bool = False):
+    """Показывает календарь для выбора даты бронирования."""
+    if not multi_booking:
+        parts = callback.data.split("_")
+        supply_id = parts[2]  
+        preorder_id = parts[3]
+        
+        # Сохраняем данные в состояние
+        await state.update_data({
+            "booking_supply_id": supply_id,
+            "booking_preorder_id": preorder_id
+        })
+    else:
+        # Для мультибронирования не нужен конкретный supply_id
+        supply_id = "multi"
+        preorder_id = "multi"
+    
+    # Показываем календарь текущего месяца
+    current_date = datetime.now()
+    calendar_markup = TelegramCalendar.create_calendar(
+        year=current_date.year,
+        month=current_date.month,
+        supply_id=supply_id,
+        preorder_id=preorder_id
+    )
+    
+    calendar_text = TelegramCalendar.get_calendar_text(
+        year=current_date.year,
+        month=current_date.month
+    )
+    
+    if multi_booking:
+        calendar_text = f"🎯 <b>Выбор даты для мультибронирования</b>\n\n{calendar_text}"
+    
+    await callback.message.edit_text(
+        calendar_text,
+        parse_mode="HTML",
+        reply_markup=calendar_markup
+    )
+
+
+# Обработчики календаря
+@router.callback_query(F.data.startswith("calendar_"))
+async def calendar_handler(callback: CallbackQuery, state: FSMContext):
+    """Обрабатывает действия с календарем."""
+    callback_data = callback.data
+    parsed = parse_calendar_callback(callback_data)
+    
+    if not parsed or parsed[0] == "ignore":
+        # Игнорируем клики на заголовки и пустые дни
+        await callback.answer()
+        return
+    
+    action_type = parsed[0]
+    
+    if action_type == "nav":
+        # Навигация по месяцам
+        if len(parsed) >= 5:
+            year, month, supply_id, preorder_id = parsed[1], parsed[2], parsed[3], parsed[4]
+            
+            # Обновляем календарь на новый месяц
+            calendar_markup = TelegramCalendar.create_calendar(
+                year=year,
+                month=month,
+                supply_id=supply_id,
+                preorder_id=preorder_id
+            )
+            
+            calendar_text = TelegramCalendar.get_calendar_text(year=year, month=month)
+            
+            await callback.message.edit_text(
+                calendar_text,
+                parse_mode="HTML",
+                reply_markup=calendar_markup
+            )
+            await callback.answer()
+    
+    elif action_type == "select":
+        # Выбор даты
+        if len(parsed) >= 4:
+            selected_date, supply_id, preorder_id = parsed[1], parsed[2], parsed[3]
+            
+            # Добавляем дату в список выбранных дат в состоянии (без дубликатов)
+            data = await state.get_data()
+            selected_dates = data.get("selected_dates", [])
+            if selected_date not in selected_dates:
+                selected_dates.append(selected_date)
+            await state.update_data(selected_dates=selected_dates, supply_id=supply_id, preorder_id=preorder_id)
+            
+            # Текст со списком выбранных дат
+            dates_text = "\n".join([f"• {d}" for d in selected_dates]) if selected_dates else "—"
+            
+            # Кнопки: добавить еще дату, выбрать коэффициент, очистить, назад
+            next_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="➕ Добавить еще дату",
+                    callback_data=f"select_date_{supply_id}_{preorder_id}"
+                )],
+                [InlineKeyboardButton(
+                    text="💰 Выбрать коэффициент",
+                    callback_data=f"coeff_after_dates_{supply_id}_{preorder_id}"
+                )],
+                [InlineKeyboardButton(
+                    text="🧹 Очистить выбор",
+                    callback_data=f"clear_dates_{supply_id}_{preorder_id}"
+                )],
+                [InlineKeyboardButton(
+                    text="🔙 Назад к вариантам",
+                    callback_data=f"browser_book_supply:{supply_id}"
+                )]
+            ])
+            
+            await callback.message.edit_text(
+                f"📅 <b>ВЫБРАННЫЕ ДАТЫ</b>\n\n"
+                f"🆔 Поставка: <code>{supply_id}</code>\n"
+                f"📋 Заказ: <code>{preorder_id}</code>\n\n"
+                f"📅 <b>Список дат:</b>\n{dates_text}\n\n"
+                f"Вы можете добавить еще даты или перейти к выбору коэффициента.",
+                parse_mode="HTML",
+                reply_markup=next_keyboard
+            )
+            await callback.answer("Дата добавлена")
+    
+    else:
+        await callback.answer()
+
+
+# Обработчик очистки выбранных дат
+@router.callback_query(F.data.startswith("clear_dates_"))
+async def clear_dates_handler(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    parts = callback.data.split("_")
+    supply_id = parts[2]
+    preorder_id = parts[3]
+    
+    await state.update_data(selected_dates=[])
+    
+    await callback.message.edit_text(
+        f"🧹 Выбор дат очищен.\n\n"
+        f"Нажмите, чтобы выбрать даты заново:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📅 Открыть календарь", callback_data=f"select_date_{supply_id}_{preorder_id}")],
+            [InlineKeyboardButton(text="🔙 Назад к вариантам", callback_data=f"browser_book_supply:{supply_id}")]
+        ]),
+        parse_mode="HTML"
+    )
+
+
+# Обработчик показа меню коэффициента ПОСЛЕ выбора дат
+@router.callback_query(F.data.startswith("coeff_after_dates_"))
+async def coeff_after_dates_handler(callback: CallbackQuery, state: FSMContext):
+    parts = callback.data.split("_")
+    supply_id = parts[3]
+    preorder_id = parts[4]
+    
+    data = await state.get_data()
+    selected_dates = data.get("selected_dates", [])
+    if not selected_dates:
+        await callback.answer("Сначала выберите даты", show_alert=True)
+        return
+    
+    # Создаем клавиатуру с коэффициентами (0-20)
+    keyboard_buttons = []
+    keyboard_buttons.append([InlineKeyboardButton(
+        text="🆓 Бесплатно (0)",
+        callback_data=f"coeff_select_0_{supply_id}_{preorder_id}"
+    )])
+    coeff_buttons = []
+    for i in range(1, 21):
+        coeff_buttons.append(InlineKeyboardButton(
+            text=f"{i}",
+            callback_data=f"coeff_select_{i}_{supply_id}_{preorder_id}"
+        ))
+        if len(coeff_buttons) == 5:
+            keyboard_buttons.append(coeff_buttons)
+            coeff_buttons = []
+    if coeff_buttons:
+        keyboard_buttons.append(coeff_buttons)
+    keyboard_buttons.append([InlineKeyboardButton(
+        text="🔙 Назад к датам",
+        callback_data=f"select_date_{supply_id}_{preorder_id}"
+    )])
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+    
+    dates_text = ", ".join(selected_dates)
+    await callback.message.edit_text(
+        f"💰 <b>ВЫБОР КОЭФФИЦИЕНТА</b>\n\n"
+        f"📦 <b>Поставка:</b> <code>{supply_id}</code>\n"
+        f"📋 <b>Заказ:</b> <code>{preorder_id}</code>\n"
+        f"📅 <b>Даты:</b> {dates_text}\n\n"
+        f"Выберите коэффициент, он будет проверяться ТОЛЬКО на выбранных датах.",
+        parse_mode="HTML",
+        reply_markup=keyboard
+    )
+
+
+# Обработчик выбора конкретного коэффициента
+@router.callback_query(F.data.startswith("coeff_select_"))
+async def coefficient_selected_handler(callback: CallbackQuery, state: FSMContext):
+    """Обрабатывает выбор конкретного коэффициента."""
+    parts = callback.data.split("_")
+    coefficient = float(parts[2])
+    supply_id = parts[3]
+    preorder_id = parts[4]
+    
+    # Проверяем это мультибронирование или обычное
+    if supply_id == "multi" and preorder_id == "multi":
+        # Мультибронирование - вызываем функцию из supplies_management
+        from .supplies_management import _execute_multi_booking
+        data = await state.get_data()
+        selected_dates = data.get("selected_dates", [])
+        
+        if selected_dates:
+            await _execute_multi_booking(
+                callback, state, "coefficient_dates", coefficient=coefficient
+            )
+        else:
+            await _execute_multi_booking(
+                callback, state, "coefficient", coefficient=coefficient
+            )
+    else:
+        # Обычное бронирование одной поставки
+        data = await state.get_data()
+        selected_dates = data.get("selected_dates", [])
+        
+        if selected_dates:
+            # Если выбраны даты — бронируем по датам с указанным коэффициентом
+            await _execute_booking(
+                callback, state, supply_id, preorder_id,
+                "coefficient_dates", custom_date=None, coefficient=coefficient
+            )
+        else:
+            # Иначе — старый сценарий (поиск даты с коэффициентом)
+            await _execute_booking(
+                callback, state, supply_id, preorder_id,
+                "coefficient", custom_date=None, coefficient=coefficient
+            )
+
+
+# Обработчик подтверждения выбранной даты
+@router.callback_query(F.data.startswith("confirm_date_"))
+async def confirm_date_handler(callback: CallbackQuery, state: FSMContext):
+    """Подтверждает выбранную дату и запускает бронирование."""
+    parts = callback.data.split("_")
+    selected_date = parts[2]  # DD.MM.YYYY
+    supply_id = parts[3]
+    preorder_id = parts[4]
+    
+    # НЕ ОЧИЩАЕМ СОСТОЯНИЕ! Нужны данные поставки!
+    # await state.clear()  # УБИРАЮ ЭТУ СТРОКУ!
+    
+    # Запускаем бронирование с выбранной датой
+    await _execute_booking(callback, state, supply_id, preorder_id, "custom", selected_date)
+
+
+# Обработчик ввода кастомной даты (оставляем для совместимости)
+@router.message(F.text, StateFilter("waiting_for_custom_date"))
+async def process_custom_date(message: Message, state: FSMContext):
+    """Обрабатывает введенную пользователем дату."""
+    user_date = message.text.strip()
+    data = await state.get_data()
+    supply_id = data.get("booking_supply_id")
+    preorder_id = data.get("booking_preorder_id")
+    
+    if not supply_id or not preorder_id:
+        await message.answer("❌ Ошибка: данные поставки не найдены. Начните сначала.")
+        await state.clear()
+        return
+    
+    # Проверяем формат даты
+    try:
+        from datetime import datetime, timedelta
+        
+        # Пробуем различные форматы
+        formats = ['%d.%m.%Y', '%d/%m/%Y', '%d-%m-%Y']
+        parsed_date = None
+        
+        for fmt in formats:
+            try:
+                parsed_date = datetime.strptime(user_date, fmt)
+                break
+            except ValueError:
+                continue
+        
+        if not parsed_date:
+            await message.answer(
+                f"❌ <b>Неверный формат даты!</b>\n\n"
+                f"🔍 Вы ввели: <code>{user_date}</code>\n\n"
+                f"📝 Используйте один из форматов:\n"
+                f"• DD.MM.YYYY (например: 20.09.2024)\n"
+                f"• DD/MM/YYYY (например: 20/09/2024)\n"
+                f"• DD-MM-YYYY (например: 20-09-2024)",
+                parse_mode="HTML"
+            )
+            return
+        
+        # Проверяем что дата не в прошлом
+        tomorrow = datetime.now() + timedelta(days=1)
+        if parsed_date.date() < tomorrow.date():
+            await message.answer(
+                f"❌ <b>Дата слишком ранняя!</b>\n\n"
+                f"🔍 Вы выбрали: <code>{parsed_date.strftime('%d.%m.%Y')}</code>\n"
+                f"📅 Минимальная дата: <code>{tomorrow.strftime('%d.%m.%Y')}</code>\n\n"
+                f"⚠️ Выберите дату не раньше завтрашнего дня.",
+                parse_mode="HTML"
+            )
+            return
+        
+        # Сохраняем дату и переходим к бронированию
+        await state.update_data({"custom_date": user_date})
+        await state.clear()
+        
+        # Создаем фейковый callback для вызова бронирования
+        fake_callback = type('FakeCallback', (), {
+            'message': message,
+            'from_user': message.from_user,
+            'data': f"custom_date_{supply_id}_{preorder_id}"
+        })()
+        
+        # Удаляем сообщение пользователя
+        try:
+            await message.delete()
+        except:
+            pass
+        
+        await _execute_booking(fake_callback, state, supply_id, preorder_id, "custom", user_date)
+        
+    except Exception as e:
+        logger.error(f"Ошибка обработки даты: {e}")
+        await message.answer(
+            f"❌ Ошибка обработки даты. Попробуйте еще раз.",
+            parse_mode="HTML"
+        )
+
+
+# Универсальная функция бронирования
+async def _execute_booking(callback, state: FSMContext, supply_id: str, preorder_id: str, booking_type: str, custom_date: str = None, coefficient: float = None):
+    """Выполняет бронирование поставки с выбранными параметрами."""
+    user_id = callback.from_user.id
+    
+    # Получаем данные из состояния
+    data = await state.get_data()
+    selected_supply = data.get("selected_supply")
+    
+    if not selected_supply:
+        # Если данные поставки не найдены в состоянии, попробуем найти через API
+        logger.warning(f"⚠️ Данные поставки не найдены в состоянии для supply_id: {supply_id}")
+        
+        try:
+            # Получаем API ключи пользователя
+            from ...services.database_service import DatabaseService
+            db_service = DatabaseService()
+            api_keys = await db_service.get_decrypted_api_keys(user_id)
+            
+            if api_keys:
+                api_key = api_keys[0]  # Берем первый ключ
+                wb_api = WBSuppliesAPIClient(api_key)
+                supplies = await wb_api.get_supplies()
+                
+                # Ищем нужную поставку
+                found_supply = None
+                for supply in supplies:
+                    if str(supply.get('id')) == str(supply_id) or str(supply.get('preorderID')) == str(preorder_id):
+                        found_supply = supply
+                        break
+                
+                if found_supply:
+                    selected_supply = found_supply
+                    logger.info(f"✅ Найдена поставка через API: {found_supply}")
+                    # Сохраняем в состояние для дальнейшего использования
+                    await state.update_data({"selected_supply": selected_supply})
+                else:
+                    await safe_edit_text(callback.message, f"❌ Поставка {supply_id} не найдена через API", parse_mode="HTML")
+                    return
+            else:
+                await safe_edit_text(callback.message, "❌ API ключи не найдены", parse_mode="HTML")
+                return
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка поиска поставки через API: {e}")
+            await safe_edit_text(callback.message, f"❌ Ошибка поиска поставки: {str(e).replace('<', '&lt;').replace('>', '&gt;')}", parse_mode="HTML")
+            return
+    
+    supply_name = selected_supply.get("name", f"Поставка #{supply_id}")
+    
+    # Определяем тип бронирования для отображения
+    booking_type_text = {
+        "quick": "⚡ Быстрое бронирование (через 3 дня)",
+        "max_coeff": "📊 Максимальный коэффициент",
+        "custom": f"📅 Кастомная дата: {custom_date}"
+    }.get(booking_type, "🤖 Автоматическое бронирование")
+    
+    await safe_edit_text(
+        callback.message,
+        f"🤖 <b>Запускаю бронирование...</b>\n\n"
+        f"📦 <b>{supply_name}</b>\n"
+        f"🆔 ID: <code>{supply_id}</code>\n"
+        f"📋 Заказ: <code>{preorder_id}</code>\n"
+        f"🎯 Режим: {booking_type_text}\n\n"
         f"⏳ Открываю браузер и выполняю вход...",
         parse_mode="HTML"
     )
@@ -494,29 +1035,97 @@ async def browser_book_supply(callback: CallbackQuery, state: FSMContext):
             parse_mode="HTML"
         )
         
-        # Выполняем бронирование поставки
-        # Выполняем бронирование с новым методом
-        booking_result = await browser.book_supply_by_id(
-            supply_id=str(supply_id),
-            preorder_id=str(preorder_id),
-            min_hours_ahead=80  # Бронируем минимум на 80 часов вперед как ты просил
-        )
+        # Выполняем бронирование поставки с выбранными параметрами
+        if booking_type == "quick":
+            # Быстрое бронирование через 3 дня
+            booking_result = await browser.book_supply_by_id(
+                supply_id=str(supply_id),
+                preorder_id=str(preorder_id),
+                min_hours_ahead=80
+            )
+        elif booking_type == "max_coeff":
+            # Бронирование с максимальным коэффициентом
+            booking_result = await browser.book_supply_by_id(
+                supply_id=str(supply_id),
+                preorder_id=str(preorder_id),
+                min_hours_ahead=80,
+                use_max_coefficient=True
+            )
+        elif booking_type == "custom":
+            # Бронирование на кастомную дату
+            booking_result = await browser.book_supply_by_id(
+                supply_id=str(supply_id),
+                preorder_id=str(preorder_id),
+                min_hours_ahead=80,
+                custom_date=custom_date
+            )
+        elif booking_type == "coefficient":
+            # Бронирование с конкретным коэффициентом
+            booking_result = await browser.book_supply_by_id(
+                supply_id=str(supply_id),
+                preorder_id=str(preorder_id),
+                min_hours_ahead=80,
+                target_coefficient=coefficient
+            )
+        elif booking_type == "coefficient_dates":
+            # Бронирование по списку выбранных дат с указанным коэффициентом
+            data = await state.get_data()
+            selected_dates = data.get("selected_dates", [])
+            
+            if not selected_dates:
+                booking_result = {"success": False, "message": "❌ Даты не выбраны"}
+            else:
+                # Передаем весь список дат в browser_automation для умной обработки
+                booking_result = await browser.book_supply_by_id(
+                    supply_id=str(supply_id),
+                    preorder_id=str(preorder_id),
+                    min_hours_ahead=80,
+                    target_coefficient=coefficient,
+                    selected_dates=selected_dates
+                )
+        else:
+            # По умолчанию - быстрое бронирование
+            booking_result = await browser.book_supply_by_id(
+                supply_id=str(supply_id),
+                preorder_id=str(preorder_id),
+                min_hours_ahead=80
+            )
         
         booking_success = booking_result["success"]
         booking_message = booking_result["message"]
         booked_date = booking_result.get("booked_date")
         
+        # ПОЛУЧАЕМ ДЕТАЛИ БРОНИРОВАНИЯ
+        booking_date = booking_result.get("booking_date", "Неизвестно")
+        warehouse_name = booking_result.get("warehouse_name", "Неизвестен")
+        coefficient = booking_result.get("coefficient", "Неизвестен")
+        new_supply_id = booking_result.get("new_supply_id")
+        
         # НЕ закрываем браузер - оставляем его открытым для пользователя
         # await browser.close_browser()
         
         if booking_success:
-            await callback.message.edit_text(
+            # Формируем сообщение с учетом нового ID
+            message_text = (
                 f"🎉 <b>ПОСТАВКА УСПЕШНО ЗАБРОНИРОВАНА!</b>\n\n"
                 f"📦 <b>{supply_name}</b>\n"
-                f"🆔 ID: <code>{supply_id}</code>\n"
+                f"🆔 Старый ID: <code>{supply_id}</code>\n"
                 f"📋 Заказ: <code>{preorder_id}</code>\n"
-                f"📅 Забронирована на: <b>{booked_date}</b>\n\n"
-                f"✅ {booking_message}",
+            )
+            
+            # Добавляем новый ID если найден
+            if new_supply_id and new_supply_id != str(supply_id):
+                message_text += f"🆔 <b>Новый ID поставки:</b> <code>{new_supply_id}</code>\n"
+            
+            message_text += (
+                f"\n📅 <b>Дата поставки:</b> {booking_date}\n"
+                f"🏬 <b>Склад:</b> {warehouse_name}\n"
+                f"📊 <b>Коэффициент:</b> {coefficient}\n\n"
+                f"✅ {escape_html(booking_message)}"
+            )
+            
+            await callback.message.edit_text(
+                message_text,
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="📦 К поставкам", callback_data="view_supplies")],
@@ -529,7 +1138,7 @@ async def browser_book_supply(callback: CallbackQuery, state: FSMContext):
                 error_text = (
                     f"🔐 <b>Требуется авторизация</b>\n\n"
                     f"📦 <b>{supply_name}</b>\n"
-                    f"❌ {booking_message}\n\n"
+                    f"❌ {escape_html(booking_message)}\n\n"
                     f"Сначала войдите в аккаунт WB через браузерное бронирование."
                 )
                 buttons = [
@@ -541,7 +1150,7 @@ async def browser_book_supply(callback: CallbackQuery, state: FSMContext):
                     f"⚠️ <b>Бронирование не удалось</b>\n\n"
                     f"📦 <b>{supply_name}</b>\n"
                     f"🔄 Попытки: {booking_result.get('attempts', 0)}\n"
-                    f"❌ {booking_message}\n\n"
+                    f"❌ {escape_html(booking_message)}\n\n"
                     f"Попробуйте позже или выберите другие параметры."
                 )
                 buttons = [
@@ -552,7 +1161,7 @@ async def browser_book_supply(callback: CallbackQuery, state: FSMContext):
                 error_text = (
                     f"⚠️ <b>Бронирование не удалось</b>\n\n"
                     f"📦 <b>{supply_name}</b>\n"
-                    f"❌ {booking_message}\n\n"
+                    f"❌ {escape_html(booking_message)}\n\n"
                     f"Попробуйте позже или обратитесь в поддержку."
                 )
                 buttons = [
@@ -662,8 +1271,8 @@ async def start_auto_booking(callback: CallbackQuery, state: FSMContext):
     )
     
     try:
-        # Получаем браузер через единый менеджер
-        browser = await browser_manager.get_browser(user_id, headless=True, debug_mode=False)
+        # Получаем браузер через единый менеджер (видимый для отладки)
+        browser = await browser_manager.get_browser(user_id, headless=False, debug_mode=True)
         
         if not browser:
             raise Exception("Не удалось запустить браузер")
@@ -701,7 +1310,7 @@ async def start_auto_booking(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             f"❌ <b>Ошибка автобронирования</b>\n\n"
             f"Не удалось запустить автобронирование:\n"
-            f"<code>{str(e)}</code>",
+            f"<code>{escape_html(str(e))}</code>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"auto_book:{warehouse_id}")],
@@ -797,7 +1406,7 @@ async def check_available_slots(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             f"❌ <b>Ошибка проверки слотов</b>\n\n"
             f"Не удалось получить данные о слотах:\n"
-            f"<code>{str(e)}</code>",
+            f"<code>{escape_html(str(e))}</code>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"check_slots:{warehouse_id}")],
@@ -812,8 +1421,8 @@ async def auto_booking_task(user_id: int, bot):
     if not session:
         return
     
-    # Получаем браузер через единый менеджер
-    browser = await browser_manager.get_browser(user_id, headless=True, debug_mode=False)
+    # Получаем браузер через единый менеджер (видимый для отладки мониторинга)
+    browser = await browser_manager.get_browser(user_id, headless=False, debug_mode=True)
     if not browser:
         logger.error(f"❌ Не удалось получить браузер для пользователя {user_id}")
         return
@@ -1033,7 +1642,7 @@ async def monitor_supply_directly(callback: CallbackQuery, state: FSMContext):
             f"❌ <b>Ошибка мониторинга</b>\n\n"
             f"📦 <b>{supply_name}</b>\n"
             f"Не удалось получить данные о слотах.\n\n"
-            f"Ошибка: <code>{str(e)}</code>",
+            f"Ошибка: <code>{escape_html(str(e))}</code>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"monitor_supply:{supply_id}")],
@@ -1501,7 +2110,7 @@ async def process_sms_code_for_booking(message: Message, state: FSMContext):
                 await loading_msg.edit_text(
                     f"❌ <b>Ошибка бронирования</b>\n\n"
                     f"📦 <b>{supply_name}</b>\n"
-                    f"💥 Произошла ошибка: <code>{str(e)}</code>",
+                    f"💥 Произошла ошибка: <code>{escape_html(str(e))}</code>",
                     parse_mode="HTML",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                         [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"browser_book_supply:{supply_id}")],

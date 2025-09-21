@@ -39,7 +39,7 @@ class BrowserManager:
             
             # СОЗДАЕМ НОВЫЙ БРАУЗЕР ДЛЯ ЭТОГО ПОЛЬЗОВАТЕЛЯ
             try:
-                logger.info(f"🚀 Создаю новый браузер для пользователя {user_id}")
+                logger.info(f"🚀 НОВЫЙ БРАУЗЕР для пользователя {user_id} (тип: {browser_type}, headless: {headless})")
                 browser = WBBrowserAutomationPro(
                     headless=headless, 
                     debug_mode=debug_mode, 
@@ -94,6 +94,76 @@ class BrowserManager:
                 return True
             
             return False
+    
+    async def create_session_clone(self, source_user_id: int, target_user_id: int, browser_type: str = "firefox") -> Optional[WBBrowserAutomationPro]:
+        """
+        Создает клон браузера с той же сессией для мультибронирования.
+        
+        Args:
+            source_user_id: ID исходного пользователя (источник сессии)
+            target_user_id: ID целевого пользователя (новый браузер)
+            browser_type: Тип браузера
+            
+        Returns:
+            Новый браузер с скопированной сессией или None
+        """
+        logger.info(f"🎭 Создаю клон сессии: {source_user_id} -> {target_user_id}")
+        
+        # Проверяем что исходный браузер существует
+        source_browser = self._browsers.get(source_user_id)
+        if not source_browser:
+            logger.error(f"❌ Исходный браузер пользователя {source_user_id} не найден")
+            return None
+        
+        try:
+            # Создаем новый браузер для целевого пользователя
+            target_browser = await self.get_browser(
+                user_id=target_user_id, 
+                headless=True, 
+                debug_mode=False, 
+                browser_type=browser_type
+            )
+            
+            if not target_browser:
+                logger.error(f"❌ Не удалось создать целевой браузер для {target_user_id}")
+                return None
+            
+            # Копируем cookies и сессию
+            await self._copy_browser_session(source_browser, target_browser)
+            
+            logger.info(f"✅ Сессия успешно скопирована: {source_user_id} -> {target_user_id}")
+            return target_browser
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка создания клона сессии: {e}")
+            return None
+    
+    async def _copy_browser_session(self, source_browser: WBBrowserAutomationPro, target_browser: WBBrowserAutomationPro):
+        """Копирует сессию между браузерами (только cookies для безопасности)."""
+        try:
+            # Получаем cookies из исходного браузера
+            logger.info("🍪 Копирую cookies...")
+            source_cookies = await source_browser.page.context.cookies()
+            
+            if source_cookies:
+                # Устанавливаем cookies в целевой браузер
+                await target_browser.page.context.add_cookies(source_cookies)
+                logger.info(f"✅ Скопировано {len(source_cookies)} cookies")
+            else:
+                logger.warning("⚠️ В исходном браузере нет cookies для копирования")
+            
+            # Переходим на главную страницу WB в целевом браузере для активации cookies
+            logger.info("🌐 Активирую cookies на главной странице WB...")
+            await target_browser.page.goto("https://suppliers.wildberries.ru", wait_until="domcontentloaded")
+            
+            # Даём время на загрузку и применение cookies
+            await asyncio.sleep(2)
+            
+            logger.info("✅ Сессия успешно скопирована (cookies)")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка копирования сессии: {e}")
+            raise
     
     async def force_close_browser(self) -> None:
         """ПРИНУДИТЕЛЬНО ЗАКРЫВАЕТ ВСЕ БРАУЗЕРЫ."""

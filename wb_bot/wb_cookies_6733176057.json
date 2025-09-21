@@ -1,10 +1,20 @@
 [
   {
+    "name": "_wbauid",
+    "value": "10219116801757650240",
+    "domain": ".wildberries.ru",
+    "path": "/",
+    "expires": 1789186240,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
     "name": "wbx-seller-device-id",
     "value": "supplier-portal__Windows-c5301944-6570-46ac-8b1f-0b811a8873d6",
     "domain": ".seller-auth.wildberries.ru",
     "path": "/auth/",
-    "expires": 1789186307.036978,
+    "expires": 1789186307,
     "httpOnly": true,
     "secure": true,
     "sameSite": "None"
@@ -14,19 +24,9 @@
     "value": "ru",
     "domain": ".wildberries.ru",
     "path": "/",
-    "expires": 1792210311.162812,
+    "expires": 1792210311,
     "httpOnly": false,
     "secure": true,
-    "sameSite": "Lax"
-  },
-  {
-    "name": "_wbauid",
-    "value": "10219116801757650240",
-    "domain": ".wildberries.ru",
-    "path": "/",
-    "expires": 1789186240,
-    "httpOnly": false,
-    "secure": false,
     "sameSite": "Lax"
   },
   {
@@ -44,7 +44,7 @@
     "value": "4e534a47-2555-4ea1-ab80-94c43a1e63cb",
     "domain": ".wildberries.ru",
     "path": "/",
-    "expires": 1760242308.987529,
+    "expires": 1760242308,
     "httpOnly": true,
     "secure": true,
     "sameSite": "Lax"
@@ -64,7 +64,7 @@
     "value": "84ec4904-054e-4ceb-972f-1173479f6353",
     "domain": "seller.wildberries.ru",
     "path": "/",
-    "expires": 1758255107.365007,
+    "expires": 1758255107,
     "httpOnly": true,
     "secure": true,
     "sameSite": "None"
@@ -74,7 +74,7 @@
     "value": "ru",
     "domain": "seller.wildberries.ru",
     "path": "/",
-    "expires": 1792210311.162654,
+    "expires": 1792210311,
     "httpOnly": false,
     "secure": true,
     "sameSite": "Lax"
@@ -84,7 +84,7 @@
     "value": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NTc2NTAzMTAsInVzZXIiOiI5Nzg3ODE0MyIsInNoYXJkX2tleSI6IjgiLCJjbGllbnRfaWQiOiJzZWxsZXItcG9ydGFsIiwic2Vzc2lvbl9pZCI6ImZmMTRkMjNmNjE0NTQxZDBiNDJlNzhmNGM4NDNlMTJhIiwidXNlcl9yZWdpc3RyYXRpb25fZHQiOjE2NzQxMTYxMDMsInZlcnNpb24iOjN9.nGnPvigkNPNUn5UvUIv5EpDEIDZYroUdapvrzI6qj_WVgZpCptwoeeySp0BKTqzTX0PvRe0KWBm_DUGVKmrm9oWbvy0Lyy48U9piz1iRIibsna9ZoZ2YERyFpuc6cLmmMa61wMmDp2d4lwBjuvhDl51Pm67No4rKClCLteNmR9FLfTnTqvmFhy5l6_WcAtKVmCHyBs_HraMMKznVNQBHRcXBaZjpTvrAlkK6SAdRtdE-IKmFv6d7qgHWazGPF9s58NAbJwZm6Q40eNbgsfvkNuyy1MwrMDJavGyZ15DugXqOpa_6V01A4Zl06iP1eB6sDdCcs9IBV4zPMuC5qja5FA",
     "domain": ".seller-auth.wildberries.ru",
     "path": "/",
-    "expires": 1765426308.987431,
+    "expires": 1765426308,
     "httpOnly": true,
     "secure": true,
     "sameSite": "Lax"
@@ -94,7 +94,7 @@
     "value": "1011ecf1-8531-42f0-9665-45643914ee45",
     "domain": "seller.wildberries.ru",
     "path": "/",
-    "expires": 1792210311.9658,
+    "expires": 1792210311,
     "httpOnly": false,
     "secure": true,
     "sameSite": "Lax"
@@ -104,7 +104,7 @@
     "value": "1011ecf1-8531-42f0-9665-45643914ee45",
     "domain": ".wildberries.ru",
     "path": "/",
-    "expires": 1792210311.965903,
+    "expires": 1792210311,
     "httpOnly": false,
     "secure": true,
     "sameSite": "Lax"
@@ -134,7 +134,7 @@
     "value": "u65CHThHA+U3XVNQqzj/RYAhQ1oNmL7DZ0TaRICB7HLYTCYq+gnsnz/bwR6SothiQhOHsnDppDcE76gcO5HCgrgy0arba2PPXpnIjZKesQbgOgDAdKbtKRyTsUBXThuMpR+tZD1dtOD8ltm/KIAY3rYiKYomUjz/vyga",
     "domain": "seller-services.wildberries.ru",
     "path": "/",
-    "expires": 1789186313.102127,
+    "expires": 1789186313,
     "httpOnly": false,
     "secure": true,
     "sameSite": "None"

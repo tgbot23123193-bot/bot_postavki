@@ -25,12 +25,29 @@ except ImportError:
 from .config import get_settings
 from .database import init_database, close_database
 from .services.monitoring import start_monitoring_service, stop_monitoring_service
+from .services.browser_manager import BrowserManager
+from .services.multi_booking_manager import MultiBookingManager
 from .utils.logger import setup_logging, get_logger
 from .bot.handlers import routers
 
 # Initialize logger
 setup_logging()
 logger = get_logger(__name__)
+
+# Глобальные переменные для доступа к менеджерам
+app_instance = None
+
+def get_browser_manager() -> BrowserManager:
+    """Возвращает экземпляр BrowserManager."""
+    if app_instance is None:
+        raise RuntimeError("Приложение не инициализировано")
+    return app_instance.browser_manager
+
+def get_multi_booking_manager() -> MultiBookingManager:
+    """Возвращает экземпляр MultiBookingManager."""
+    if app_instance is None:
+        raise RuntimeError("Приложение не инициализировано")
+    return app_instance.multi_booking_manager
 
 
 class BotApplication:
@@ -48,6 +65,10 @@ class BotApplication:
     def __init__(self):
         """Initialize bot application."""
         self.settings = get_settings()
+        
+        # Создаем синглтон менеджеры для мультибронирования
+        self.browser_manager = BrowserManager()
+        self.multi_booking_manager = MultiBookingManager(self.browser_manager)
         self.bot: Bot = None
         self.dp: Dispatcher = None
         self.redis: aioredis.Redis = None
@@ -140,6 +161,17 @@ class BotApplication:
         logger.info("Starting bot in polling mode...")
         
         try:
+            # Delete any existing webhook before starting polling
+            logger.info("Checking for existing webhook...")
+            webhook_info = await self.bot.get_webhook_info()
+            if webhook_info.url:
+                logger.info(f"Found existing webhook: {webhook_info.url}")
+                logger.info("Deleting webhook to enable polling...")
+                await self.bot.delete_webhook(drop_pending_updates=True)
+                logger.info("Webhook deleted successfully, pending updates dropped")
+            else:
+                logger.info("No existing webhook found")
+            
             # Start monitoring service in background
             logger.info("Starting monitoring service...")
             self.monitoring_task = asyncio.create_task(start_monitoring_service())
@@ -262,6 +294,7 @@ class BotApplication:
 
 # Global application instance
 app = BotApplication()
+app_instance = app  # Устанавливаем глобальную ссылку
 
 
 def setup_signal_handlers() -> None:
@@ -269,7 +302,9 @@ def setup_signal_handlers() -> None:
     
     def signal_handler(signum, frame):
         logger.info(f"Received signal {signum}, initiating shutdown...")
-        asyncio.create_task(app.stop())
+        # Don't use asyncio.create_task in signal handler
+        # The main loop will handle shutdown
+        app.is_running = False
     
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)

@@ -22,11 +22,13 @@ class SuppliesStates(StatesGroup):
     viewing_supplies = State()
     selecting_dates = State()
     monitoring_slots = State()
+    multi_booking_selection = State()  # Состояние мультибронирования
 
 
-def create_supplies_keyboard(supplies: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
+def create_supplies_keyboard(supplies: List[Dict[str, Any]], multi_booking_mode: bool = False, selected_supplies: List[str] = None) -> InlineKeyboardMarkup:
     """Создает клавиатуру со списком ВСЕХ поставок."""
     keyboard = []
+    selected_supplies = selected_supplies or []
     
     for supply in supplies[:20]:  # Показываем максимум 20 поставок
         supply_id = supply.get("id", "")
@@ -52,22 +54,41 @@ def create_supplies_keyboard(supplies: List[Dict[str, Any]]) -> InlineKeyboardMa
         display_name = supply_name[:25]
         if len(supply_name) > 25:
             display_name += "..."
-            
-        button_text = f"{status_emoji} {display_name} ({status})"
+        
+        # В режиме мультибронирования добавляем чекбоксы
+        if multi_booking_mode:
+            checkbox = "☑️" if str(supply_id) in selected_supplies else "☐"
+            button_text = f"{checkbox} {status_emoji} {display_name}"
+            callback_data = f"multi_toggle:{supply_id}"
+        else:
+            button_text = f"{status_emoji} {display_name} ({status})"
+            callback_data = f"supply_select:{supply_id}"
         
         keyboard.append([
             InlineKeyboardButton(
                 text=button_text,
-                callback_data=f"supply_select:{supply_id}"
+                callback_data=callback_data
             )
         ])
     
     # Кнопки управления
-    keyboard.extend([
-        [InlineKeyboardButton(text="🔄 Обновить список", callback_data="supplies_refresh")],
-        [InlineKeyboardButton(text="🏬 Склады", callback_data="view_warehouses")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="main_menu")]
-    ])
+    if multi_booking_mode:
+        management_buttons = [
+            [InlineKeyboardButton(text="🎯 Начать мультибронь", callback_data="start_multi_booking")],
+            [InlineKeyboardButton(text="🔄 Обновить список", callback_data="multi_supplies_refresh")],
+            [InlineKeyboardButton(text="⬅️ Обычный режим", callback_data="view_supplies")]
+        ]
+        if selected_supplies:
+            management_buttons.insert(0, [InlineKeyboardButton(text="🗑 Очистить выбор", callback_data="clear_multi_selection")])
+    else:
+        management_buttons = [
+            [InlineKeyboardButton(text="🎯 Мультибронирование", callback_data="multi_booking_mode")],
+            [InlineKeyboardButton(text="🔄 Обновить список", callback_data="supplies_refresh")],
+            [InlineKeyboardButton(text="🏬 Склады", callback_data="view_warehouses")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="main_menu")]
+        ]
+    
+    keyboard.extend(management_buttons)
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
@@ -396,3 +417,276 @@ async def back_to_supply(callback: CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text="⬅️ К списку поставок", callback_data="view_supplies")]
         ])
     )
+
+
+# =============================================================================
+# МУЛЬТИБРОНИРОВАНИЕ
+# =============================================================================
+
+@router.callback_query(F.data == "multi_booking_mode")
+async def enter_multi_booking_mode(callback: CallbackQuery, state: FSMContext):
+    """Переключает в режим мультибронирования."""
+    await callback.message.edit_text(
+        "⏳ <b>Переключаюсь в режим мультибронирования...</b>\n\n"
+        "Загружаю список поставок для выбора...",
+        parse_mode="HTML"
+    )
+    
+    # Получаем существующие поставки из состояния или загружаем заново
+    data = await state.get_data()
+    supplies = data.get("supplies", [])
+    
+    if not supplies:
+        user_id = callback.from_user.id
+        from .callbacks import get_user_api_keys_list
+        api_keys = await get_user_api_keys_list(user_id)
+        if not api_keys:
+            await callback.message.edit_text(
+                "❌ <b>API ключ не найден</b>\n\n"
+                "Для мультибронирования необходим API ключ.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="⬅️ Назад", callback_data="view_supplies")]
+                ])
+            )
+            return
+            
+        try:
+            async with WBSuppliesAPIClient(api_keys[0]) as api_client:
+                supplies = await api_client.get_supplies(limit=50)
+        except Exception as e:
+            logger.error(f"❌ Ошибка загрузки поставок для мультибронирования: {e}")
+            await callback.message.edit_text(
+                f"❌ <b>Ошибка загрузки поставок</b>\n\n"
+                f"<code>{str(e)}</code>",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="⬅️ Назад", callback_data="view_supplies")]
+                ])
+            )
+            return
+    
+    await callback.message.edit_text(
+        f"🎯 <b>Мультибронирование (до 3 поставок)</b>\n\n"
+        f"📦 Доступно поставок: {len(supplies)}\n"
+        f"☑️ Выбрано: 0 / 3\n\n"
+        f"Нажмите на поставки для выбора:",
+        parse_mode="HTML",
+        reply_markup=create_supplies_keyboard(supplies, multi_booking_mode=True)
+    )
+    
+    # Сохраняем состояние
+    await state.update_data(
+        supplies=supplies,
+        selected_supplies_multi=[],
+        multi_booking_mode=True
+    )
+    await state.set_state(SuppliesStates.multi_booking_selection)
+
+
+@router.callback_query(F.data.startswith("multi_toggle:"))
+async def toggle_supply_selection(callback: CallbackQuery, state: FSMContext):
+    """Переключает выбор поставки в режиме мультибронирования."""
+    supply_id = callback.data.split(":")[1]
+    
+    data = await state.get_data()
+    selected_supplies = data.get("selected_supplies_multi", [])
+    supplies = data.get("supplies", [])
+    
+    # Переключаем выбор
+    if supply_id in selected_supplies:
+        selected_supplies.remove(supply_id)
+    else:
+        if len(selected_supplies) >= 3:
+            await callback.answer("❌ Максимум 3 поставки одновременно!", show_alert=True)
+            return
+        selected_supplies.append(supply_id)
+    
+    # Обновляем клавиатуру
+    await callback.message.edit_text(
+        f"🎯 <b>Мультибронирование (до 3 поставок)</b>\n\n"
+        f"📦 Доступно поставок: {len(supplies)}\n"
+        f"☑️ Выбрано: {len(selected_supplies)} / 3\n\n"
+        f"Нажмите на поставки для выбора:",
+        parse_mode="HTML",
+        reply_markup=create_supplies_keyboard(supplies, multi_booking_mode=True, selected_supplies=selected_supplies)
+    )
+    
+    await state.update_data(selected_supplies_multi=selected_supplies)
+
+
+@router.callback_query(F.data == "clear_multi_selection")
+async def clear_multi_selection(callback: CallbackQuery, state: FSMContext):
+    """Очищает выбор в режиме мультибронирования."""
+    data = await state.get_data()
+    supplies = data.get("supplies", [])
+    
+    await callback.message.edit_text(
+        f"🎯 <b>Мультибронирование (до 3 поставок)</b>\n\n"
+        f"📦 Доступно поставок: {len(supplies)}\n"
+        f"☑️ Выбрано: 0 / 3\n\n"
+        f"Нажмите на поставки для выбора:",
+        parse_mode="HTML",
+        reply_markup=create_supplies_keyboard(supplies, multi_booking_mode=True)
+    )
+    
+    await state.update_data(selected_supplies_multi=[])
+
+
+@router.callback_query(F.data == "multi_supplies_refresh")
+async def refresh_multi_supplies(callback: CallbackQuery, state: FSMContext):
+    """Обновляет список поставок в режиме мультибронирования."""
+    await enter_multi_booking_mode(callback, state)
+
+
+@router.callback_query(F.data == "start_multi_booking")
+async def start_multi_booking(callback: CallbackQuery, state: FSMContext):
+    """Запускает мультибронирование выбранных поставок."""
+    data = await state.get_data()
+    selected_supplies_ids = data.get("selected_supplies_multi", [])
+    supplies = data.get("supplies", [])
+    
+    if not selected_supplies_ids:
+        await callback.answer("❌ Не выбрано ни одной поставки!", show_alert=True)
+        return
+    
+    # Получаем информацию о выбранных поставках
+    selected_supplies = []
+    for supply in supplies:
+        if str(supply.get("id")) in selected_supplies_ids:
+            selected_supplies.append(supply)
+    
+    # Показываем подтверждение
+    supplies_text = ""
+    for i, supply in enumerate(selected_supplies, 1):
+        supply_name = supply.get("name", f"Поставка #{supply.get('id')}")
+        status = supply.get("status", "unknown")
+        supplies_text += f"{i}. {supply_name[:30]} ({status})\n"
+    
+    await callback.message.edit_text(
+        f"🎯 <b>Подтверждение мультибронирования</b>\n\n"
+        f"Выбрано поставок: {len(selected_supplies)}\n\n"
+        f"{supplies_text}\n"
+        f"🔥 Каждая поставка откроется в отдельном браузере\n"
+        f"⚡ Бронирование будет происходить параллельно\n\n"
+        f"Выберите параметры бронирования:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📅 Выбрать дату", callback_data="multi_select_date")],
+            [InlineKeyboardButton(text="📊 Выбрать коэффициент", callback_data="multi_select_coefficient")],
+            [InlineKeyboardButton(text="🔥 Максимальный коэффициент", callback_data="multi_max_coefficient")],
+            [InlineKeyboardButton(text="⚡ Быстрое бронирование", callback_data="multi_quick_booking")],
+            [InlineKeyboardButton(text="⬅️ Назад к выбору", callback_data="multi_booking_mode")]
+        ])
+    )
+    
+    # Сохраняем выбранные поставки
+    await state.update_data(selected_supplies_for_booking=selected_supplies)
+
+
+# Обработчики параметров мультибронирования
+@router.callback_query(F.data == "multi_select_date")
+async def multi_select_date(callback: CallbackQuery, state: FSMContext):
+    """Выбор даты для мультибронирования."""
+    # Переходим к стандартному календарю
+    from .booking_management import select_date_handler
+    await select_date_handler(callback, state, multi_booking=True)
+
+
+@router.callback_query(F.data == "multi_select_coefficient")
+async def multi_select_coefficient(callback: CallbackQuery, state: FSMContext):
+    """Выбор коэффициента для мультибронирования."""
+    from .booking_management import select_coefficient_handler
+    await select_coefficient_handler(callback, state, multi_booking=True)
+
+
+@router.callback_query(F.data == "multi_max_coefficient")
+async def multi_max_coefficient(callback: CallbackQuery, state: FSMContext):
+    """Мультибронирование с максимальным коэффициентом."""
+    await _execute_multi_booking(callback, state, booking_type="max_coefficient")
+
+
+@router.callback_query(F.data == "multi_quick_booking")
+async def multi_quick_booking(callback: CallbackQuery, state: FSMContext):
+    """Быстрое мультибронирование."""
+    await _execute_multi_booking(callback, state, booking_type="quick")
+
+
+async def _execute_multi_booking(callback: CallbackQuery, state: FSMContext, booking_type: str, custom_date: str = None, coefficient: float = None):
+    """Выполняет мультибронирование."""
+    try:
+        data = await state.get_data()
+        selected_supplies = data.get("selected_supplies_for_booking", [])
+        
+        if not selected_supplies:
+            await callback.answer("❌ Поставки не выбраны!", show_alert=True)
+            return
+        
+        user_id = callback.from_user.id
+        
+        # Формируем параметры бронирования
+        booking_params = {}
+        if booking_type == "date":
+            booking_params["custom_date"] = custom_date
+        elif booking_type == "coefficient":
+            booking_params["target_coefficient"] = coefficient
+        elif booking_type == "coefficient_dates":
+            selected_dates = data.get("selected_dates", [])
+            booking_params["target_coefficient"] = coefficient
+            booking_params["selected_dates"] = selected_dates
+        elif booking_type == "max_coefficient":
+            booking_params["use_max_coefficient"] = True
+        
+        # Показываем уведомление о запуске
+        await callback.message.edit_text(
+            f"🚀 <b>Запускаю мультибронирование!</b>\n\n"
+            f"📦 Поставок: {len(selected_supplies)}\n"
+            f"🔥 Тип: {booking_type}\n\n"
+            f"⏳ Создаю отдельные браузеры...",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")]
+            ])
+        )
+        
+        # Получаем синглтон менеджеры
+        from ...main import get_multi_booking_manager
+        multi_booking_manager = get_multi_booking_manager()
+        
+        # Создаем callback для уведомлений
+        async def progress_callback(message: str):
+            try:
+                await callback.message.edit_text(
+                    f"🎯 <b>Мультибронирование</b>\n\n{message}",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")]
+                    ])
+                )
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка обновления прогресса: {e}")
+        
+        # Запускаем мультибронирование
+        session_id = await multi_booking_manager.start_multi_booking(
+            user_id=user_id,
+            supplies=selected_supplies,
+            booking_params=booking_params,
+            progress_callback=progress_callback
+        )
+        
+        logger.info(f"🎯 Запущено мультибронирование с session_id: {session_id}")
+        
+        # Сохраняем session_id в состоянии
+        await state.update_data(multi_booking_session_id=session_id)
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка запуска мультибронирования: {e}")
+        await callback.message.edit_text(
+            f"❌ <b>Ошибка мультибронирования</b>\n\n"
+            f"<code>{str(e)}</code>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data="start_multi_booking")],
+                [InlineKeyboardButton(text="⬅️ Назад", callback_data="multi_booking_mode")]
+            ])
+        )

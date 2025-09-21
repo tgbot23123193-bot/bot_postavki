@@ -275,21 +275,29 @@ class WBSuppliesAPIClient:
             # Возвращаем пустой список вместо raise, чтобы не ломать весь процесс
             return []
     
-    async def get_supply_details(self, supply_id: str) -> Dict[str, Any]:
+    async def get_supply_details(self, supply_id: str, is_preorder_id: bool = False) -> Dict[str, Any]:
         """
-        Получает детальную информацию о поставке.
+        Получает детальную информацию о поставке по официальному API WB.
         
         Args:
-            supply_id: ID поставки
+            supply_id: ID поставки или заказа
+            is_preorder_id: True если передается ID заказа, False если ID поставки
             
         Returns:
             Детали поставки
         """
-        logger.info(f"🔍 Получаю детали поставки: {supply_id}")
+        logger.info(f"🔍 Получаю детали поставки: {supply_id} (preorder: {is_preorder_id})")
         
         try:
-            response = await self._make_request("GET", f"/supplies/{supply_id}")
-            logger.info(f"✅ Получены детали поставки {supply_id}")
+            # Используем правильный эндпоинт согласно документации WB
+            params = {"isPreorderID": is_preorder_id} if is_preorder_id else {}
+            
+            response = await self._make_request(
+                "GET", 
+                f"/supplies/{supply_id}",
+                params=params
+            )
+            logger.info(f"✅ Получены детали поставки {supply_id}: {response}")
             return response
             
         except Exception as e:

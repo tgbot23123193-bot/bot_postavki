@@ -1,0 +1,14 @@
+10
+
+https://seller.wildberries.ru/
+https://seller.wildberries.ru/sw.js
+true
+{5d10f232-bb30-4ccd-8cf4-5635c166039f}
+0
+1758434338415583
+1758434338416325
+1758434338091158
+0
+true
+0
+#
