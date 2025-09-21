@@ -1,0 +1,80 @@
+# Git
+.git
+.gitignore
+
+# Environment files
+.env*
+config_local.env
+config_production.env
+
+# Documentation
+*.md
+docs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Testing
+.tox/
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Browser data
+wb_user_data_*/
+screenshots_*/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.log
+
+# Railway
+.railway/
+
+# Node modules
+node_modules/

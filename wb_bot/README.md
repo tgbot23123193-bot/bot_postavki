@@ -117,7 +117,8 @@ docker-compose run --rm migration
 #### Режим разработки
 ```bash
 # Локальный запуск
-python -m app.main
+
+
 ```
 
 #### Webhook режим
