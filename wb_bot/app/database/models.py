@@ -99,6 +99,24 @@ class User(Base):
         cascade="all, delete-orphan",
         order_by="BrowserSession.created_at.desc()"
     )
+    balance: Optional["UserBalance"] = relationship(
+        "UserBalance",
+        back_populates="user",
+        uselist=False,
+        cascade="all, delete-orphan"
+    )
+    payments: List["Payment"] = relationship(
+        "Payment",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        order_by="Payment.created_at.desc()"
+    )
+    balance_transactions: List["BalanceTransaction"] = relationship(
+        "BalanceTransaction",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        order_by="BalanceTransaction.created_at.desc()"
+    )
     
     # Constraints
     __table_args__ = (
@@ -419,3 +437,143 @@ class BrowserSession(Base):
         # После 5 неудачных попыток помечаем сессию как невалидную
         if self.login_attempts >= 5:
             self.session_valid = False
+
+
+class PaymentStatus(PyEnum):
+    """Payment status enumeration."""
+    PENDING = "pending"  # ожидает оплаты
+    SUCCEEDED = "succeeded"  # успешно
+    CANCELED = "canceled"  # отменен
+    FAILED = "failed"  # ошибка
+
+
+class TransactionType(PyEnum):
+    """Transaction type enumeration."""
+    DEPOSIT = "deposit"  # пополнение
+    WITHDRAWAL = "withdrawal"  # списание за услугу
+    REFUND = "refund"  # возврат
+
+
+class UserBalance(Base):
+    """User balance model."""
+    __tablename__ = 'user_balances'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey('users.id'), nullable=False, unique=True)
+    balance = Column(Float, default=0.0, nullable=False)  # Текущий баланс в рублях
+    total_spent = Column(Float, default=0.0, nullable=False)  # Всего потрачено
+    total_deposited = Column(Float, default=0.0, nullable=False)  # Всего пополнено
+    bookings_count = Column(Integer, default=0, nullable=False)  # Количество бронирований
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    
+    # Связи
+    user = relationship("User", back_populates="balance")
+    transactions = relationship("BalanceTransaction", back_populates="user_balance", cascade="all, delete-orphan")
+    
+    # Ограничения
+    __table_args__ = (
+        CheckConstraint(balance >= 0, name="balance_non_negative"),
+        CheckConstraint(total_spent >= 0, name="total_spent_non_negative"),
+        CheckConstraint(total_deposited >= 0, name="total_deposited_non_negative"),
+        CheckConstraint(bookings_count >= 0, name="bookings_count_non_negative"),
+    )
+    
+    def __repr__(self):
+        return f"<UserBalance(user_id={self.user_id}, balance={self.balance})>"
+    
+    def can_afford_booking(self, cost: float = 10.0) -> bool:
+        """Проверяет может ли пользователь оплатить бронирование."""
+        return self.balance >= cost
+    
+    def deduct_for_booking(self, cost: float = 10.0) -> bool:
+        """Списывает средства за бронирование."""
+        if self.can_afford_booking(cost):
+            self.balance -= cost
+            self.total_spent += cost
+            self.bookings_count += 1
+            return True
+        return False
+
+
+class Payment(Base):
+    """Payment model for YooKassa payments."""
+    __tablename__ = 'payments'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey('users.id'), nullable=False)
+    
+    # YooKassa данные
+    yookassa_payment_id = Column(String(100), nullable=False, unique=True)
+    amount = Column(Float, nullable=False)  # Сумма в рублях
+    currency = Column(String(3), default="RUB", nullable=False)
+    description = Column(String(255), nullable=True)
+    
+    # Статус и метаданные
+    status = Column(SQLEnum(PaymentStatus), default=PaymentStatus.PENDING, nullable=False)
+    confirmation_url = Column(String(500), nullable=True)  # Ссылка для оплаты
+    
+    # Техническая информация
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    paid_at = Column(DateTime(timezone=True), nullable=True)  # Время оплаты
+    
+    # Дополнительные данные
+    metadata = Column(Text, nullable=True)  # JSON с дополнительными данными
+    receipt_url = Column(String(500), nullable=True)  # Ссылка на чек
+    
+    # Связи
+    user = relationship("User", back_populates="payments")
+    
+    # Индексы
+    __table_args__ = (
+        Index('idx_payments_user_id', 'user_id'),
+        Index('idx_payments_status', 'status'),
+        Index('idx_payments_yookassa_id', 'yookassa_payment_id'),
+        CheckConstraint(amount > 0, name="amount_positive"),
+    )
+    
+    def __repr__(self):
+        return f"<Payment(id={self.id}, user_id={self.user_id}, amount={self.amount}, status={self.status})>"
+
+
+class BalanceTransaction(Base):
+    """Balance transaction history model."""
+    __tablename__ = 'balance_transactions'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey('users.id'), nullable=False)
+    balance_id = Column(Integer, ForeignKey('user_balances.id'), nullable=False)
+    
+    # Детали транзакции
+    transaction_type = Column(SQLEnum(TransactionType), nullable=False)
+    amount = Column(Float, nullable=False)  # Сумма (положительная для пополнения, отрицательная для списания)
+    description = Column(String(255), nullable=False)
+    
+    # Баланс до и после
+    balance_before = Column(Float, nullable=False)
+    balance_after = Column(Float, nullable=False)
+    
+    # Связанные объекты
+    payment_id = Column(Integer, ForeignKey('payments.id'), nullable=True)  # Связь с платежом
+    booking_id = Column(Integer, ForeignKey('booking_results.id'), nullable=True)  # Связь с бронированием
+    
+    # Технические поля
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    
+    # Связи
+    user = relationship("User", back_populates="balance_transactions")
+    user_balance = relationship("UserBalance", back_populates="transactions")
+    payment = relationship("Payment")
+    booking = relationship("BookingResult")
+    
+    # Индексы
+    __table_args__ = (
+        Index('idx_balance_transactions_user_id', 'user_id'),
+        Index('idx_balance_transactions_type', 'transaction_type'),
+        Index('idx_balance_transactions_created_at', 'created_at'),
+    )
+    
+    def __repr__(self):
+        return f"<BalanceTransaction(id={self.id}, user_id={self.user_id}, type={self.transaction_type}, amount={self.amount})>"

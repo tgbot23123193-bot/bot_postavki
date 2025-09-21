@@ -10,11 +10,13 @@ from .browser_booking import router as browser_booking_router
 from .supplies_management import router as supplies_management_router
 from .booking_management import router as booking_management_router
 from .supplies_settings import router as supplies_settings_router
+from .wallet import router as wallet_router
 
 # Export all routers
 # ВАЖНО: callbacks_router должен быть ПЕРВЫМ для корректной работы FSM!
 routers = [
     callbacks_router,
+    wallet_router,  # Личный кабинет и баланс
     booking_router,  # Автобронирование
     browser_booking_router,  # Браузерное бронирование
     supplies_management_router,  # Управление поставками

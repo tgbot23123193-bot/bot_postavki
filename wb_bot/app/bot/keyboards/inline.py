@@ -61,6 +61,10 @@ def get_main_menu() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(
+                text="💰 Баланс",
+                callback_data="wallet_main"
+            ),
+            InlineKeyboardButton(
                 text="🔑 API ключи",
                 callback_data=MainMenuCallback(action="api_keys").pack()
             ),

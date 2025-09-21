@@ -168,6 +168,17 @@ class WBBookingService:
     ) -> Tuple[bool, str]:
         """Забронировать существующую поставку на конкретную дату."""
         from .database_service import db_service
+        from .payment_service import payment_service
+        
+        # Проверяем баланс пользователя
+        balance_info = await payment_service.get_user_balance_info(user_id)
+        if not balance_info['can_afford_booking']:
+            return False, (
+                f"❌ <b>Недостаточно средств</b>\n\n"
+                f"💰 Баланс: {balance_info['balance']:.2f} ₽\n"
+                f"💳 Требуется: 10 ₽\n\n"
+                f"Пополните баланс для бронирования поставок."
+            )
         
         # Получаем API ключи из базы данных
         api_keys = await db_service.get_decrypted_api_keys(user_id)
@@ -207,16 +218,29 @@ class WBBookingService:
                 if resp.status == 200:
                     result = await resp.json()
                     
-                    message = (
-                        f"✅ <b>Поставка забронирована!</b>\n\n"
-                        f"🆔 ID поставки: {supply_id}\n"
-                        f"📦 Склад: {supply_details.get('warehouseName', 'Неизвестен')}\n"
-                        f"📅 Дата: {supply_date}\n"
-                        f"📋 Статус: {supply_details.get('statusName', 'Запланировано')}\n"
-                        f"📞 Телефон: {supply_details.get('phone', 'Не указан')}\n\n"
-                        f"🎉 Поставка успешно запланирована!"
-                    )
-                    return True, message
+                    # Списываем средства за успешное бронирование
+                    charge_success, charge_error = await payment_service.charge_for_booking(user_id)
+                    
+                    if charge_success:
+                        # Получаем обновленный баланс
+                        updated_balance = await payment_service.get_user_balance_info(user_id)
+                        
+                        message = (
+                            f"✅ <b>Поставка забронирована!</b>\n\n"
+                            f"🆔 ID поставки: {supply_id}\n"
+                            f"📦 Склад: {supply_details.get('warehouseName', 'Неизвестен')}\n"
+                            f"📅 Дата: {supply_date}\n"
+                            f"📋 Статус: {supply_details.get('statusName', 'Запланировано')}\n"
+                            f"📞 Телефон: {supply_details.get('phone', 'Не указан')}\n\n"
+                            f"💰 Списано: 10 ₽\n"
+                            f"💳 Баланс: {updated_balance['balance']:.2f} ₽\n\n"
+                            f"🎉 Поставка успешно запланирована!"
+                        )
+                        return True, message
+                    else:
+                        # Если не удалось списать средства, отменяем бронирование
+                        logger.error(f"Failed to charge user {user_id} for booking: {charge_error}")
+                        return False, f"❌ Ошибка списания средств: {charge_error}"
                 else:
                     error_text = await resp.text()
                     logger.error(f"Failed to book supply: {resp.status} - {error_text}")

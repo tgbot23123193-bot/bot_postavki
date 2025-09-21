@@ -159,6 +159,43 @@ class LoggingSettings(BaseSettings):
         env_prefix = "LOG_"
 
 
+class PaymentSettings(BaseSettings):
+    """Payment and YooKassa configuration settings."""
+    
+    # YooKassa credentials
+    yookassa_shop_id: str = Field(
+        default="", 
+        description="YooKassa Shop ID"
+    )
+    yookassa_secret_key: str = Field(
+        default="", 
+        description="YooKassa Secret Key"
+    )
+    
+    # Payment settings
+    currency: str = Field(default="RUB", description="Payment currency")
+    booking_cost: float = Field(default=10.0, description="Cost per booking in rubles")
+    min_deposit_amount: float = Field(default=500.0, description="Minimum deposit amount")
+    max_deposit_amount: float = Field(default=50000.0, description="Maximum deposit amount")
+    
+    # Webhook settings
+    webhook_url: str = Field(
+        default="", 
+        description="Webhook URL for payment notifications"
+    )
+    webhook_secret: str = Field(
+        default="", 
+        description="Webhook secret for signature verification"
+    )
+    
+    # Features
+    payment_enabled: bool = Field(default=True, description="Enable payment system")
+    test_mode: bool = Field(default=False, description="Enable test mode payments")
+    
+    class Config:
+        env_prefix = "PAYMENT_"
+
+
 class Settings(BaseSettings):
     """Main application settings."""
     
@@ -176,6 +213,7 @@ class Settings(BaseSettings):
     monitoring: MonitoringSettings = Field(default_factory=MonitoringSettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
+    payment: PaymentSettings = Field(default_factory=PaymentSettings)
     
     # Paths
     base_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent)
