@@ -61,9 +61,7 @@ ENV PYTHONUNBUFFERED=1
 # Порт для Railway (если нужен webhook)
 EXPOSE 8080
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import asyncio; import sys; sys.path.append('/app'); from wb_bot.app.config import get_settings; print('OK')" || exit 1
+# Health check убран для стабильности деплоя
 
 # Команда запуска
 CMD ["python", "-m", "wb_bot.app.main"]

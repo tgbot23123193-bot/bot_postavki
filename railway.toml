@@ -4,8 +4,6 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 startCommand = "python -m wb_bot.app.main"
-healthcheckPath = "/health"
-healthcheckTimeout = 30
 restartPolicyType = "always"
 
 [env]
