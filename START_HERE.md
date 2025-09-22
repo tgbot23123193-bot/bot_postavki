@@ -47,14 +47,7 @@ TG_BOT_TOKEN=получите_от_@BotFather
 SECURITY_ENCRYPTION_KEY=MCE7AaXntGlOs-TsbwZtvmTr2v5ZLgQp313qJ41uxx0
 SECURITY_JWT_SECRET=Dq024Qv6y1uZyy7afd4cVpT01dTkPzFcAofFB3e6oQc
 TG_WEBHOOK_SECRET=3dsY5-Kw6z6FYMHbf4sSKQ
-PAYMENT_WEBHOOK_SECRET=ключ_из_railway-setup.py
-```
-
-## 💳 ПЕРЕМЕННЫЕ ЮKASSA
-
-Для системы платежей добавьте:
-
-```env
+PAYMENT_WEBHOOK_SECRET=fLOA1tMFLaOoYsLqeXXc0OV2my9Hhpo8aXkLU9696RE
 PAYMENT_YOOKASSA_SHOP_ID=ваш_shop_id
 PAYMENT_YOOKASSA_SECRET_KEY=ваш_secret_key
 PAYMENT_ENABLED=true

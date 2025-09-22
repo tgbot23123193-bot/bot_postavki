@@ -74,6 +74,16 @@ class PaymentService:
     
     async def get_user_balance_info(self, user_id: int) -> Dict[str, Any]:
         """Get user balance information."""
+        # Если платежи отключены, возвращаем бесконечный баланс
+        if not self.settings.payment.payment_enabled:
+            return {
+                "balance": 999999.0,
+                "total_spent": 0.0,
+                "total_deposited": 0.0,
+                "bookings_count": 0,
+                "can_afford_booking": True
+            }
+        
         try:
             balance = await self.get_or_create_user_balance(user_id)
             
@@ -238,6 +248,11 @@ class PaymentService:
     
     async def charge_for_booking(self, user_id: int, booking_id: Optional[int] = None) -> Tuple[bool, Optional[str]]:
         """Charge user for booking."""
+        # Если платежи отключены, всегда возвращаем успех
+        if not self.settings.payment.payment_enabled:
+            logger.info(f"Payment disabled - skipping charge for user {user_id}")
+            return True, None
+        
         async with get_session() as session:
             try:
                 # Получить баланс пользователя

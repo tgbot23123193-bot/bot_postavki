@@ -71,9 +71,9 @@ def main():
     print("-" * 30)
     
     yookassa_vars = [
+        ("PAYMENT_ENABLED", "true", "🔥 ГЛАВНАЯ: включить/отключить платежи (false = БЕСПЛАТНО)"),
         ("PAYMENT_YOOKASSA_SHOP_ID", "ВАШИ_SHOP_ID_ИЗ_ЮKASSA", "Shop ID из личного кабинета ЮKassa"),
         ("PAYMENT_YOOKASSA_SECRET_KEY", "ВАШ_SECRET_KEY_ИЗ_ЮKASSA", "Secret Key из личного кабинета ЮKassa"),
-        ("PAYMENT_ENABLED", "true", "Включить систему платежей"),
         ("PAYMENT_TEST_MODE", "false", "Тестовый режим (true для тестов)")
     ]
     

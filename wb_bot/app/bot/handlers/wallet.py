@@ -83,6 +83,19 @@ def get_deposit_amounts_keyboard() -> InlineKeyboardMarkup:
 @router.message(Command("wallet", "balance"))
 async def wallet_command(message: Message):
     """Handle wallet command."""
+    from ...config import get_settings
+    settings = get_settings()
+    
+    # Если платежи отключены, показываем сообщение
+    if not settings.payment.payment_enabled:
+        await message.answer(
+            "💰 <b>Платежная система отключена</b>\n\n"
+            "Все функции бота доступны бесплатно!\n"
+            "Бронируйте поставки без ограничений.",
+            parse_mode="HTML"
+        )
+        return
+    
     user_id = message.from_user.id
     
     # Показываем индикатор загрузки
@@ -110,6 +123,23 @@ async def wallet_command(message: Message):
 @router.callback_query(F.data == "wallet_main")
 async def wallet_main_callback(callback: CallbackQuery):
     """Handle wallet main callback."""
+    from ...config import get_settings
+    settings = get_settings()
+    
+    # Если платежи отключены, показываем сообщение
+    if not settings.payment.payment_enabled:
+        await callback.message.edit_text(
+            "💰 <b>Платежная система отключена</b>\n\n"
+            "Все функции бота доступны бесплатно!\n"
+            "Бронируйте поставки без ограничений.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")]
+            ])
+        )
+        await callback.answer()
+        return
+    
     user_id = callback.from_user.id
     
     try:
