@@ -45,7 +45,6 @@ APScheduler>=3.10.4
 
 # Payment processing
 yookassa>=3.0.0
-decimal>=1.0.0
 
 # Development tools (optional)
 pytest>=7.4.0
