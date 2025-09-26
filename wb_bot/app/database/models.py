@@ -520,7 +520,7 @@ class Payment(Base):
     paid_at = Column(DateTime(timezone=True), nullable=True)  # Время оплаты
     
     # Дополнительные данные
-    metadata = Column(Text, nullable=True)  # JSON с дополнительными данными
+    payment_metadata = Column(Text, nullable=True)  # JSON с дополнительными данными
     receipt_url = Column(String(500), nullable=True)  # Ссылка на чек
     
     # Связи

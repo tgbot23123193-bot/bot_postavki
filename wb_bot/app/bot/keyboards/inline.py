@@ -12,6 +12,17 @@ from aiogram.filters.callback_data import CallbackData
 from ...database.models import MonitoringTask, APIKey, SupplyType, DeliveryType, MonitoringMode
 
 
+class RedistributionCallback(CallbackData, prefix="redistrib"):
+    """Callback data for redistribution actions."""
+    action: str  # start, cancel, back
+
+
+class WarehouseCallback(CallbackData, prefix="warehouse"):
+    """Callback data for warehouse selection."""
+    action: str  # source, destination, select
+    warehouse_id: str
+
+
 class MainMenuCallback(CallbackData, prefix="main"):
     """Main menu callback data."""
     action: str  # monitoring, api_keys, settings, help, stats
@@ -25,7 +36,7 @@ class MonitoringCallback(CallbackData, prefix="monitor"):
 
 class APIKeyCallback(CallbackData, prefix="apikey"):
     """API key callback data."""
-    action: str  # add, list, delete, validate
+    action: str  # add, list, delete, validate, confirm_delete
     key_id: int = 0
 
 
@@ -57,6 +68,10 @@ def get_main_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton(
                 text="📦 Управление поставками",
                 callback_data="view_supplies"
+            ),
+            InlineKeyboardButton(
+                text="🔄 Перераспределение остатков",
+                callback_data="redistribution_menu"
             )
         ],
         [

@@ -10,7 +10,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardBut
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import Command
 
-from ..keyboards.inline import MainMenuCallback, get_main_menu
+from ..keyboards.inline import MainMenuCallback, get_main_menu, APIKeyCallback
 from ..states import APIKeyStates
 from ...services.database_service import db_service
 from ...utils.logger import get_logger
@@ -83,7 +83,7 @@ async def show_api_keys_menu(callback: CallbackQuery):
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="➕ Добавить API ключ", callback_data="add_api_key")],
-            [InlineKeyboardButton(text="📋 Мои ключи", callback_data="list_api_keys")],
+            [InlineKeyboardButton(text="📋 Мои ключи", callback_data=APIKeyCallback(action="list").pack())],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]
         ])
         

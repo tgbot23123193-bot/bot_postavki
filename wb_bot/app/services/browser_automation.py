@@ -3248,24 +3248,19 @@ class WBBrowserAutomationPro:
                                 delete window.WB._bot_detected;
                             }
                             
-                            // Очищаем localStorage от флагов автоматизации
-                            Object.keys(localStorage).forEach(key => {
-                                if (key.includes('automation') || key.includes('bot') || key.includes('playwright')) {
-                                    localStorage.removeItem(key);
-                                }
-                            });
-                            
-                            // Сбрасываем sessionStorage
-                            Object.keys(sessionStorage).forEach(key => {
-                                if (key.includes('automation') || key.includes('bot') || key.includes('playwright')) {
-                                    sessionStorage.removeItem(key);
-                                }
-                            });
+                            // НЕ ОЧИЩАЕМ localStorage и sessionStorage для сохранения логина
+                            // Только очищаем специфичные флаги автоматизации без удаления авторизации
+                            try {
+                                localStorage.removeItem('__playwright_automation__');
+                                localStorage.removeItem('__bot_detected__');
+                                sessionStorage.removeItem('__playwright_automation__');
+                                sessionStorage.removeItem('__bot_detected__');
+                            } catch(e) {}
                         """)
                         
-                        # Перезагружаем страницу для полного сброса
-                        await self.page.reload(wait_until='domcontentloaded')
-                        await asyncio.sleep(1)
+                        # НЕ ПЕРЕЗАГРУЖАЕМ страницу для сохранения логина
+                        # Небольшая пауза для применения изменений
+                        await asyncio.sleep(0.5)
                         
                         # Переходим на нужную поставку заново
                         supply_url = f"https://seller.wildberries.ru/supplies-management/all?query={supply_id}"

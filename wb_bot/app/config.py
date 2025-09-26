@@ -236,13 +236,43 @@ class Settings(BaseSettings):
         return self.environment == "development"
     
     class Config:
-        env_file = None  # Отключаем .env файл
+        # Определяем .env файл в зависимости от окружения
+        env_file = None  # По умолчанию отключено для production
         case_sensitive = False
         validate_assignment = True
         extra = "allow"
 
 
-# Global settings instance
+def _get_env_file() -> Optional[str]:
+    """Определяет какой .env файл использовать в зависимости от окружения."""
+    environment = os.getenv("ENVIRONMENT", "development").lower()
+    
+    # Путь к корню проекта (на уровень выше wb_bot)
+    project_root = Path(__file__).parent.parent.parent
+    
+    if environment == "development":
+        env_file = project_root / "config_local.env"
+        if env_file.exists():
+            return str(env_file)
+    elif environment == "staging":
+        env_file = project_root / "config_railway.env" 
+        if env_file.exists():
+            return str(env_file)
+    elif environment == "production":
+        env_file = project_root / "config_production.env"
+        if env_file.exists():
+            return str(env_file)
+    
+    return None
+
+
+# Загружаем .env файл на уровне модуля
+env_file = _get_env_file()
+if env_file:
+    from dotenv import load_dotenv
+    load_dotenv(env_file, override=True)
+
+# Создаем экземпляр settings
 settings = Settings()
 
 

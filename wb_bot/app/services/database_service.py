@@ -353,6 +353,28 @@ class DatabaseService:
     
     # ==================== BROWSER SESSION MANAGEMENT ====================
     
+    async def get_browser_session(self, user_id: int) -> Optional[BrowserSession]:
+        """Получить браузерную сессию пользователя."""
+        try:
+            async with get_session() as session:
+                stmt = select(BrowserSession).where(BrowserSession.user_id == user_id)
+                result = await session.execute(stmt)
+                browser_session = result.scalar_one_or_none()
+                
+                if browser_session:
+                    logger.info(f"Found browser session for user {user_id}")
+                    return browser_session
+                else:
+                    logger.info(f"No browser session found for user {user_id}")
+                    return None
+                    
+        except SQLAlchemyError as e:
+            logger.error(f"Database error in get_browser_session: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error in get_browser_session: {e}")
+            return None
+    
     async def get_or_create_browser_session(self, user_id: int, phone_number: str = None) -> Optional[BrowserSession]:
         """Получить или создать браузерную сессию для пользователя."""
         try:
@@ -502,6 +524,102 @@ class DatabaseService:
             return None
         except Exception as e:
             logger.error(f"Unexpected error in get_browser_session_data: {e}")
+            return None
+    
+    async def get_user_api_keys(self, user_id: int) -> List[APIKey]:
+        """Получает все API ключи пользователя."""
+        try:
+            async with get_session() as session:
+                stmt = select(APIKey).where(APIKey.user_id == user_id).order_by(APIKey.created_at.desc())
+                result = await session.execute(stmt)
+                return result.scalars().all()
+        except SQLAlchemyError as e:
+            logger.error(f"Database error in get_user_api_keys: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error in get_user_api_keys: {e}")
+            return []
+    
+    async def get_api_key_by_id(self, key_id: int, user_id: int) -> Optional[APIKey]:
+        """Получает API ключ по ID (только если принадлежит пользователю)."""
+        try:
+            async with get_session() as session:
+                stmt = select(APIKey).where(
+                    APIKey.id == key_id,
+                    APIKey.user_id == user_id
+                )
+                result = await session.execute(stmt)
+                return result.scalar_one_or_none()
+        except SQLAlchemyError as e:
+            logger.error(f"Database error in get_api_key_by_id: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error in get_api_key_by_id: {e}")
+            return None
+    
+    async def delete_api_key(self, key_id: int, user_id: int) -> bool:
+        """Удаляет конкретный API ключ пользователя."""
+        try:
+            async with get_session() as session:
+                # Сначала проверяем что ключ принадлежит пользователю
+                stmt = select(APIKey).where(
+                    APIKey.id == key_id,
+                    APIKey.user_id == user_id
+                )
+                result = await session.execute(stmt)
+                api_key = result.scalar_one_or_none()
+                
+                if not api_key:
+                    logger.warning(f"API key {key_id} not found for user {user_id}")
+                    return False
+                
+                # Удаляем ключ
+                await session.delete(api_key)
+                await session.commit()
+                
+                logger.info(f"API key {key_id} deleted for user {user_id}")
+                return True
+                
+        except SQLAlchemyError as e:
+            logger.error(f"Database error in delete_api_key: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error in delete_api_key: {e}")
+            return False
+    
+    async def add_api_key(self, user_id: int, api_key: str, name: str = None, description: str = None) -> Optional[APIKey]:
+        """Добавляет новый API ключ пользователя."""
+        try:
+            from ..utils.encryption import encrypt_api_key
+            
+            async with get_session() as session:
+                # Шифруем ключ
+                encrypted_key, salt = encrypt_api_key(api_key)
+                
+                # Создаем объект API ключа
+                new_api_key = APIKey(
+                    user_id=user_id,
+                    encrypted_key=encrypted_key,
+                    salt=salt,
+                    name=name or f"API ключ {datetime.utcnow().strftime('%d.%m.%Y %H:%M')}",
+                    description=description,
+                    is_active=True,
+                    is_valid=True,  # Будет проверено при первом использовании
+                    created_at=datetime.utcnow()
+                )
+                
+                session.add(new_api_key)
+                await session.commit()
+                await session.refresh(new_api_key)
+                
+                logger.info(f"API key added for user {user_id}")
+                return new_api_key
+                
+        except SQLAlchemyError as e:
+            logger.error(f"Database error in add_api_key: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error in add_api_key: {e}")
             return None
 
 

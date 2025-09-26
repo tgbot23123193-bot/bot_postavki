@@ -116,6 +116,11 @@ class BotApplication:
             
             logger.info(f"Total routers registered: {len(routers)}")
             
+            # Initialize redistribution handlers with browser manager
+            from .bot.handlers.redistribution import init_redistribution_handlers
+            init_redistribution_handlers(self.browser_manager)
+            logger.info("Redistribution handlers initialized with browser manager")
+            
             # Set up middlewares
             await self._setup_middlewares()
             

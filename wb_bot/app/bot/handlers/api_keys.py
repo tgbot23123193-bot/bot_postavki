@@ -6,7 +6,7 @@ Wildberries API keys.
 """
 
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 
@@ -203,14 +203,31 @@ async def list_api_keys(callback: CallbackQuery):
     keys_text = (
         f"🔑 <b>Ваши API ключи ({len(api_keys)}/5)</b>\n\n"
         "📊 <b>Загружено из PostgreSQL базы данных</b>\n"
-        "Выберите ключ для управления:"
+        "👆 <b>Нажмите на ключ ниже для управления:</b>\n\n"
     )
+    
+    # Добавляем список ключей в текст для отладки
+    for i, key in enumerate(api_keys, 1):
+        status_emoji = "🟢" if key.is_valid else "🔴"
+        keys_text += f"{i}. {status_emoji} <b>{key.name}</b> (ID: {key.id})\n"
+        keys_text += f"   📅 Создан: {key.created_at.strftime('%d.%m.%Y %H:%M')}\n"
+        keys_text += f"   🔄 Статус: {'Активен' if key.is_active else 'Неактивен'}\n\n"
+    
+    keys_text += "⬇️ <b>Используйте кнопки ниже:</b>"
+    
+    # Создаем клавиатуру и логируем ее
+    keyboard = get_api_keys_list_keyboard(api_keys)
+    logger.info(f"🔧 Created keyboard with {len(keyboard.inline_keyboard)} rows")
+    
+    for i, row in enumerate(keyboard.inline_keyboard):
+        for j, button in enumerate(row):
+            logger.info(f"  Button [{i}][{j}]: '{button.text}' -> '{button.callback_data}'")
     
     logger.info(f"📤 Displaying {len(api_keys)} API keys from PostgreSQL to user {user_id}")
     await callback.message.edit_text(
         keys_text,
         parse_mode="HTML",
-        reply_markup=get_api_keys_list_keyboard(api_keys)
+        reply_markup=keyboard
     )
     await callback.answer()
 
@@ -220,6 +237,9 @@ async def manage_api_key(callback: CallbackQuery, callback_data: APIKeyCallback)
     """Show management options for specific API key."""
     user_id = callback.from_user.id
     key_id = callback_data.key_id
+    
+    logger.info(f"🔧 User {user_id} clicked MANAGE for API key {key_id}")
+    await callback.answer("⏳ Загружаю управление ключом...")
     
     api_keys = await db_service.get_user_api_keys(user_id)
     api_key = next((key for key in api_keys if key.id == key_id), None)
@@ -339,7 +359,7 @@ async def rename_api_key(message: Message, state: FSMContext):
 
 
 @router.callback_query(APIKeyCallback.filter(F.action == "delete"))
-async def confirm_delete_api_key(callback: CallbackQuery, callback_data: APIKeyCallback):
+async def delete_api_key_handler(callback: CallbackQuery, callback_data: APIKeyCallback):
     """Confirm API key deletion."""
     key_id = callback_data.key_id
     
@@ -350,54 +370,29 @@ async def confirm_delete_api_key(callback: CallbackQuery, callback_data: APIKeyC
         "Это действие нельзя отменить!"
     )
     
+    # Создаем клавиатуру с правильными APIKeyCallback
+    confirmation_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="✅ Да, удалить",
+                callback_data=APIKeyCallback(action="confirm_delete", key_id=key_id).pack()
+            ),
+            InlineKeyboardButton(
+                text="❌ Отмена",
+                callback_data=APIKeyCallback(action="back").pack()
+            )
+        ]
+    ])
+    
     await callback.message.edit_text(
         confirmation_text,
         parse_mode="HTML",
-        reply_markup=get_confirmation_keyboard("delete_key", key_id)
+        reply_markup=confirmation_keyboard
     )
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("confirm_delete_key_"))
-async def delete_api_key(callback: CallbackQuery):
-    """Delete API key after confirmation."""
-    key_id = int(callback.data.split("_")[-1])
-    user_id = callback.from_user.id
-    user_logger = UserLogger(user_id)
-    
-    # Удаляем API ключ из базы данных
-    try:
-        success = await db_service.remove_api_key(user_id, key_id)
-        message_text = "API ключ удален успешно" if success else "API ключ не найден"
-    except Exception as e:
-        success = False
-        message_text = f"Ошибка при удалении: {str(e)}"
-        logger.error(f"Failed to remove API key {key_id} for user {user_id}: {e}")
-    
-    if success:
-        user_logger.info(f"API key {key_id} deleted")
-        
-        await callback.message.edit_text(
-            f"✅ {message_text}",
-            reply_markup=get_api_keys_menu()
-        )
-    else:
-        await callback.message.edit_text(
-            f"❌ {message_text}",
-            reply_markup=get_api_keys_menu()
-        )
-    
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("cancel_delete_key"))
-async def cancel_delete_api_key(callback: CallbackQuery):
-    """Cancel API key deletion."""
-    await callback.message.edit_text(
-        "❌ Удаление отменено.",
-        reply_markup=get_api_keys_menu()
-    )
-    await callback.answer()
+# Старые обработчики удалены - используются новые с APIKeyCallback
 
 
 @router.callback_query(APIKeyCallback.filter(F.action == "validate"))
@@ -443,3 +438,116 @@ async def back_to_api_keys_menu(callback: CallbackQuery):
         reply_markup=get_api_keys_menu()
     )
     await callback.answer()
+
+
+@router.callback_query(APIKeyCallback.filter(F.action == "delete"))
+async def delete_api_key_handler(callback: CallbackQuery, callback_data: APIKeyCallback):
+    """Обработчик удаления API ключа."""
+    try:
+        user_id = callback.from_user.id
+        key_id = callback_data.key_id
+        
+        logger.info(f"🗑️ DELETE REQUEST: User {user_id} wants to delete API key {key_id}")
+        await callback.answer("⏳ Подготавливаю удаление ключа...")
+        
+        # Получаем информацию об API ключе для подтверждения
+        api_key = await db_service.get_api_key_by_id(key_id, user_id)
+        
+        if not api_key:
+            await callback.message.edit_text(
+                "❌ <b>Ошибка</b>\n\n"
+                "API ключ не найден или не принадлежит вам.",
+                parse_mode="HTML",
+                reply_markup=get_api_keys_menu()
+            )
+            await callback.answer("❌ Ключ не найден", show_alert=True)
+            return
+        
+        # Показываем информацию о ключе и запрашиваем подтверждение
+        confirmation_text = (
+            f"🗑 <b>Удаление API ключа</b>\n\n"
+            f"📝 Название: {api_key.name or 'Без названия'}\n"
+            f"📅 Создан: {api_key.created_at.strftime('%d.%m.%Y %H:%M')}\n"
+            f"🔄 Статус: {'✅ Активен' if api_key.is_active else '❌ Неактивен'}\n"
+            f"📊 Использований: {api_key.total_requests or 0}\n\n"
+            f"⚠️ <b>Это действие нельзя отменить!</b>\n"
+            f"Вы уверены что хотите удалить этот API ключ?"
+        )
+        
+        # Создаем клавиатуру подтверждения
+        confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Да, удалить",
+                    callback_data=APIKeyCallback(action="confirm_delete", key_id=key_id).pack()
+                ),
+                InlineKeyboardButton(
+                    text="❌ Отмена",
+                    callback_data=APIKeyCallback(action="list").pack()
+                )
+            ]
+        ])
+        
+        await callback.message.edit_text(
+            confirmation_text,
+            parse_mode="HTML",
+            reply_markup=confirm_keyboard
+        )
+        await callback.answer()
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при запросе удаления API ключа: {e}")
+        await callback.message.edit_text(
+            "❌ <b>Ошибка</b>\n\n"
+            "Не удалось обработать запрос на удаление.",
+            parse_mode="HTML",
+            reply_markup=get_api_keys_menu()
+        )
+        await callback.answer("❌ Ошибка", show_alert=True)
+
+
+@router.callback_query(APIKeyCallback.filter(F.action == "confirm_delete"))
+async def execute_delete_api_key_handler(callback: CallbackQuery, callback_data: APIKeyCallback):
+    """Подтверждение удаления API ключа."""
+    try:
+        user_id = callback.from_user.id
+        key_id = callback_data.key_id
+        
+        logger.info(f"👤 Пользователь {user_id} подтвердил удаление API ключа {key_id}")
+        
+        # Удаляем API ключ из базы данных
+        success = await db_service.delete_api_key(key_id, user_id)
+        
+        if success:
+            await callback.message.edit_text(
+                "✅ <b>API ключ удален</b>\n\n"
+                "Ключ успешно удален из системы.\n"
+                "Все связанные с ним данные также удалены.",
+                parse_mode="HTML",
+                reply_markup=get_api_keys_menu()
+            )
+            await callback.answer("✅ Ключ удален", show_alert=True)
+            
+            # Логируем успешное удаление
+            user_logger = UserLogger(user_id)
+            await user_logger.log_info(f"API ключ {key_id} успешно удален")
+            
+        else:
+            await callback.message.edit_text(
+                "❌ <b>Ошибка удаления</b>\n\n"
+                "Не удалось удалить API ключ.\n"
+                "Возможно, ключ уже был удален или произошла ошибка базы данных.",
+                parse_mode="HTML",
+                reply_markup=get_api_keys_menu()
+            )
+            await callback.answer("❌ Ошибка удаления", show_alert=True)
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при удалении API ключа: {e}")
+        await callback.message.edit_text(
+            "❌ <b>Ошибка</b>\n\n"
+            "Произошла ошибка при удалении ключа.",
+            parse_mode="HTML",
+            reply_markup=get_api_keys_menu()
+        )
+        await callback.answer("❌ Ошибка", show_alert=True)

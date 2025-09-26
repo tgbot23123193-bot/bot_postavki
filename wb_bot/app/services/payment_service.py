@@ -155,7 +155,7 @@ class PaymentService:
                     description=description,
                     status=PaymentStatus.PENDING,
                     confirmation_url=yookassa_payment.confirmation.confirmation_url,
-                    metadata=json.dumps(payment_data.get("metadata", {}))
+                    payment_metadata=json.dumps(payment_data.get("metadata", {}))
                 )
                 
                 session.add(payment)
