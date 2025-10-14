@@ -89,8 +89,13 @@ class BotApplication:
             
             # Initialize bot
             logger.info("Initializing bot...")
+            token = self.settings.telegram.bot_token
+            # Маскируем токен для безопасности в логах
+            masked_token = f"{token[:10]}...{token[-10:]}" if token and len(token) > 20 else "INVALID"
+            logger.info(f"Using bot token: {masked_token}")
+            
             self.bot = Bot(
-                token=self.settings.telegram.bot_token,
+                token=token,
                 default=DefaultBotProperties(
                     parse_mode=ParseMode.HTML,
                     link_preview_is_disabled=True
