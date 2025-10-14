@@ -55,20 +55,18 @@ class TelegramSettings(BaseSettings):
     webhook_url: Optional[str] = Field(default=None, description="Webhook URL for production")
     webhook_path: str = Field(default="/webhook", description="Webhook path")
     webhook_secret: Optional[str] = Field(default=None, description="Webhook secret token")
-    admin_ids: List[int] = Field(default_factory=list, description="List of admin user IDs")
+    admin_ids: Optional[str] = Field(default=None, description="Comma-separated admin user IDs")
     max_connections: int = Field(default=100, description="Max webhook connections")
     
-    @field_validator('admin_ids', mode='before')
-    @classmethod
-    def parse_admin_ids(cls, v: Any) -> List[int]:
-        """Parse admin IDs from environment variable."""
-        if v is None or v == '':
+    @property
+    def admin_ids_list(self) -> List[int]:
+        """Get parsed admin IDs as list."""
+        if not self.admin_ids:
             return []
-        if isinstance(v, str):
-            return [int(x.strip()) for x in v.split(',') if x.strip()]
-        if isinstance(v, list):
-            return v
-        return []
+        try:
+            return [int(x.strip()) for x in self.admin_ids.split(',') if x.strip()]
+        except (ValueError, AttributeError):
+            return []
     
     class Config:
         env_prefix = "TG_"
