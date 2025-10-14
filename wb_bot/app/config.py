@@ -51,7 +51,7 @@ class RedisSettings(BaseSettings):
 class TelegramSettings(BaseSettings):
     """Telegram bot configuration settings."""
     
-    bot_token: str = Field(default="8297598368:AAFAjtygKnsIwocwbdC4qTr-lmEFRZ8k4qA", description="Telegram bot token from BotFather")
+    bot_token: str = Field(..., description="Telegram bot token from BotFather")
     webhook_url: Optional[str] = Field(default=None, description="Webhook URL for production")
     webhook_path: str = Field(default="/webhook", description="Webhook path")
     webhook_secret: Optional[str] = Field(default=None, description="Webhook secret token")
