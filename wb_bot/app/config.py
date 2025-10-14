@@ -62,9 +62,13 @@ class TelegramSettings(BaseSettings):
     @classmethod
     def parse_admin_ids(cls, v: Any) -> List[int]:
         """Parse admin IDs from environment variable."""
+        if v is None or v == '':
+            return []
         if isinstance(v, str):
             return [int(x.strip()) for x in v.split(',') if x.strip()]
-        return v or []
+        if isinstance(v, list):
+            return v
+        return []
     
     class Config:
         env_prefix = "TG_"
