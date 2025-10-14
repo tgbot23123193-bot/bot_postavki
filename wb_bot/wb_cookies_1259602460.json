@@ -1,0 +1,402 @@
+[
+  {
+    "name": "guid",
+    "value": "9E93660468DE82B4X1759412916",
+    "domain": ".tns-counter.ru",
+    "path": "/",
+    "expires": 1790948916,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "bh",
+    "value": "YLKF+sYGahfcyuH/CJLYobEDn8/14QzWzvGOA4+xAw==",
+    "domain": ".yandex.ru",
+    "path": "/",
+    "expires": 1793972914,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "yashr",
+    "value": "8512047721759412915",
+    "domain": ".yandex.ru",
+    "path": "/",
+    "expires": 1790948915,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "yabs-sid",
+    "value": "792929741759412915",
+    "domain": "mc.yandex.ru",
+    "path": "/",
+    "expires": -1,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "i",
+    "value": "QJHKYLNKU6D/EcFrKXpF76xZ9MgxqNdRBTtR+Na+14l5lsTN9dzfGl/ngYOAhNtEx8A3pUvg9fwncdFJz72b7IMwpmk=",
+    "domain": ".yandex.ru",
+    "path": "/",
+    "expires": 1793972915,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "yandexuid",
+    "value": "1400323101759412915",
+    "domain": ".yandex.ru",
+    "path": "/",
+    "expires": 1793972919,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "yuidss",
+    "value": "1400323101759412915",
+    "domain": ".yandex.ru",
+    "path": "/",
+    "expires": 1793972919,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "ymex",
+    "value": "2074772919.yrts.1759412919#2074772915.yrtsi.1759412915",
+    "domain": ".yandex.ru",
+    "path": "/",
+    "expires": 1790948919,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "_yasc",
+    "value": "ii1wLEH7QwbURCsMjwliwjWoZiYyNTHUSTtagx6rk63yfir44ppIrz/OANSGASFe",
+    "domain": ".yandex.ru",
+    "path": "/",
+    "expires": 1793972919,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "_wbauid",
+    "value": "4206441321759410853",
+    "domain": ".wildberries.ru",
+    "path": "/",
+    "expires": 1790946853,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "None"
+  },
+  {
+    "name": "current_feature_version",
+    "value": "37e4ca9c-f89c-45cd-8973-5aa3c8766ea3",
+    "domain": "seller.wildberries.ru",
+    "path": "/",
+    "expires": 1760017162,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "wbx-seller-device-id",
+    "value": "supplier-portal__Windows-12452042-8885-427a-9795-e55c3f956d0d",
+    "domain": ".seller-auth.wildberries.ru",
+    "path": "/auth/",
+    "expires": 1790948858,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "wbx-refresh",
+    "value": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NTk0MTI4NTgsInVzZXIiOiI0MzMyNjY4OCIsInNoYXJkX2tleSI6IjE0IiwiY2xpZW50X2lkIjoic2VsbGVyLXBvcnRhbCIsInNlc3Npb25faWQiOiI5ODExNTVkNzc2NGI0MGYwOGVhNGQ3OGM0YTYwMGVmNiIsInVzZXJfcmVnaXN0cmF0aW9uX2R0IjoxNjc0OTg3NTA2LCJ2ZXJzaW9uIjozfQ.qJl9UbJbRnlOoQAq0Fv4AlQUDYsNkon_bjIbZIBoAN86sdOoJttgExPmW0NY0A6u8Ct7cSaB5zgREHSkSpF15Cgtz1kIIz5F2fFDuBoZXm8W75IRKhrxpUbN_cUkCybgxHZkg0h2jzRWlJjOOrLY-_rfzUiudw-IRnv26cvacjjoImYsRlKNbA26P6qTbLjuGU6u4kc2377l_CnmZCIRrCmvDYfqq9syDDssNjAFYDkl-wIzk-PFd2d-PvDhTkmZPM6uP1D16KnKS48iiMVEfhPguaR6yQMvU0glBFKzryBeVKa0NIBBtSGLpxVzU72HKglYQQuRGLNNdLizsv3cQQ",
+    "domain": ".seller-auth.wildberries.ru",
+    "path": "/",
+    "expires": 1767188858,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "wbx-validation-key",
+    "value": "ec55f481-eb44-40ff-9f44-25d046c2e669",
+    "domain": ".wildberries.ru",
+    "path": "/",
+    "expires": 1762004858,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "cfidsw-wb",
+    "value": "FBVCRP7MOBoXi1WXdQCeLY6vzgOo3Wlc2wxzBqXIk6zBVNjQRAfTuMrXJM/TtjBjh4kz1dqFysu8gP88xDzYvfp5gKlmdjcFEodVazaVdBEI6dkpPifurTNduHspKoPgoXiZOWuspUFSuEJ/0Wo5GP4aarjfY/+NmyvAgQ==",
+    "domain": ".seller-auth.wildberries.ru",
+    "path": "/",
+    "expires": 1790948858,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "None"
+  },
+  {
+    "name": "__zzatw-wb",
+    "value": "MDA0dC0cTHtmcDhhDHEWTT17CT4VHThHKHIzd2UtPmgfZU1hJzVRP0FaW1Q4NmdBEXUmCQg3LGBwVxlRExpceEdXeiweGntsJVcME15BRWllbQwtUlFRS19/Dg4/aU5ZQ11wS3E6EmBWGB5CWgtMeFtLKRZHGzJhXkZpdRVYDwxcQkYpejBBaU9jRxcfSxJ+fVkgGTJvVFV/CxhzR19vG3siXyoIJGM1Xz9EaVhTMCpYQXt1J3Z+KmUzPGwiaEtaIUtaVXwpHg1pN2wXPHVlLwkxLGJ5MVIvE0tsP0caRFpbQDsyVghDQE1HFF9BWncyUlFRS2EQR0lrZU5TQixmG3EVTQgNND1aciIPWzklWAgSPwsmIBYIbyRRDxBjQEVybxt/Nl0cOWMRCxl+OmNdRkc3FSRU4hmtbg==",
+    "domain": ".seller-auth.wildberries.ru",
+    "path": "/",
+    "expires": 1790948858,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "None"
+  },
+  {
+    "name": "locale",
+    "value": "ru",
+    "domain": "seller.wildberries.ru",
+    "path": "/",
+    "expires": 1793975450,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "external-locale",
+    "value": "ru",
+    "domain": ".wildberries.ru",
+    "path": "/",
+    "expires": 1793975450,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "x-supplier-id",
+    "value": "c16edcba-a52a-42e4-ab75-9e5faf878f4e",
+    "domain": "seller.wildberries.ru",
+    "path": "/",
+    "expires": 1793975450,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "x-supplier-id-external",
+    "value": "c16edcba-a52a-42e4-ab75-9e5faf878f4e",
+    "domain": ".wildberries.ru",
+    "path": "/",
+    "expires": 1793975450,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "__zzatw-wb",
+    "value": "MDA0dC0cTHtmcDhhDHEWTT17CT4VHThHKHIzd2UtPmgfZU1hJzVRP0FaW1Q4NmdBEXUmCQg3LGBwVxlRExpceEdXeiweGntsKFMMC11FSWllbQwtUlFRS19/Dg4/aU5ZQ11wS3E6EmBWGB5CWgtMeFtLKRZHGzJhXkZpdRVYDwxcQkYpejBBaU9jRxcfSxJ+fVkgGTJvVFV/CxhzR19vG3siXyoIJGM1Xz9EaVhTMCpYQXt1J3Z+KmUzPGwiaEtaJEdaTXstIg1pN2wXPHVlLwkxLGJ5MVIvE0tsP0caRFpbQDsyVghDQE1HFF9BWncyUlFRS2EQR0lrZU5TQixmG3EVTQgNND1aciIPWzklWAgSPwsmIBYIbyRUCxBbP0ptbxt/Nl0cOWMRCxl+OmNdRkc3FSR7dSYKCTU3YnAvTCB7SykWRxsyYV5GaXUVCggRGHF0JywmbGofGERdIXhZSjJXIBZ0dFhUPTwZRUh1MS1wVxlRDxZhDhYYRRcje0I3Yhk4QhgvPV8/YngiD2lIYCRMWU5+KR4Re3MpS3FPLH12X30beylOIA0lVBMhP05yOLnwXg==",
+    "domain": ".seller.wildberries.ru",
+    "path": "/",
+    "expires": 1790951450,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "None"
+  },
+  {
+    "name": "__zzatw-wb",
+    "value": "MDA0dC0cTHtmcDhhDHEWTT17CT4VHThHKHIzd2UtPmgfZU1hJzVRP0FaW1Q4NmdBEXUmCQg3LGBwVxlRExpceEdXeiweGntsKFMMC11FSWllbQwtUlFRS19/Dg4/aU5ZQ11wS3E6EmBWGB5CWgtMeFtLKRZHGzJhXkZpdRVYDwxcQkYpejBBaU9jRxcfSxJ+fVkgGTJvVFV/CxhzR19vG3siXyoIJGM1Xz9EaVhTMCpYQXt1J3Z+KmUzPGwiaEtaJEdaTXstIg1pN2wXPHVlLwkxLGJ5MVIvE0tsP0caRFpbQDsyVghDQE1HFF9BWncyUlFRS2EQR0lrZU5TQixmG3EVTQgNND1aciIPWzklWAgSPwsmIBYIbyRUCxBbP0ptbxt/Nl0cOWMRCxl+OmNdRkc3FSR7dSYKCTU3YnAvTCB7SykWRxsyYV5GaXUVCggRGHF0JywmbGofGERdIXhZSjJXIBZ0dFhUPTwZRUh1MS1wVxlRDxZhDhYYRRcje0I3Yhk4QhgvPV8/YngiD2lIYCRMWU5+KR4Re3MpS3FPLH12X30beylOIA0lVBMhP05yOLnwXg==",
+    "domain": ".wildberries.ru",
+    "path": "/",
+    "expires": 1790951450,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "None"
+  },
+  {
+    "name": "cfidsw-wb",
+    "value": "2vguO5aR/BCcLeJJP3wc7gmGJgmJaNXnrrTwByCVeqe2AvxG/DUt123w/GOOsWobvkmONr8+f+iK3llxnf5bS4CHJRJ5Ci8iyKQJyiGoy8zwEnfPphThZhLxWvdOEscpFgD5/VH5J3qssdKM9r6eV13AkaKB69Ct4Ya2Hg==",
+    "domain": "seller-services.wildberries.ru",
+    "path": "/",
+    "expires": 1790951453,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "cfidsw-wb",
+    "value": "2vguO5aR/BCcLeJJP3wc7gmGJgmJaNXnrrTwByCVeqe2AvxG/DUt123w/GOOsWobvkmONr8+f+iK3llxnf5bS4CHJRJ5Ci8iyKQJyiGoy8zwEnfPphThZhLxWvdOEscpFgD5/VH5J3qssdKM9r6eV13AkaKB69Ct4Ya2Hg==",
+    "domain": ".seller.wildberries.ru",
+    "path": "/",
+    "expires": 1790951453,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "None"
+  },
+  {
+    "name": "cfidsw-wb",
+    "value": "2vguO5aR/BCcLeJJP3wc7gmGJgmJaNXnrrTwByCVeqe2AvxG/DUt123w/GOOsWobvkmONr8+f+iK3llxnf5bS4CHJRJ5Ci8iyKQJyiGoy8zwEnfPphThZhLxWvdOEscpFgD5/VH5J3qssdKM9r6eV13AkaKB69Ct4Ya2Hg==",
+    "domain": ".wildberries.ru",
+    "path": "/",
+    "expires": 1790951453,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "None"
+  },
+  {
+    "name": "v_did",
+    "value": "00000199a52e8e8bb023d08105bc6945",
+    "domain": "api.vigo.one",
+    "path": "/html5/cgi-bin",
+    "expires": -1,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "None"
+  },
+  {
+    "name": "qrator_msid2",
+    "value": "v2.0.1759412913.862.d4f11c4cAA4cgaHQ|n1owHC2EjZqkRphv|OF2zegQND0ZH6Mxa0qqFPxoQLHa8SLdQxxojwVR3btDh9nvcEbwdg/dsl9+GJBoevy2pM7ItN6f/dS9Dy1JhkQ==-ycQHrqfBZ/DlSpukwQo1/l4gllU=",
+    "domain": ".rutube.ru",
+    "path": "/",
+    "expires": 1759413913,
+    "httpOnly": true,
+    "secure": false,
+    "sameSite": "None"
+  },
+  {
+    "name": "uuid",
+    "value": "3a37648e-3b75-4a7f-8a60-fb9d113c6d77",
+    "domain": ".rutube.ru",
+    "path": "/",
+    "expires": 1793972915,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "_ym_uid",
+    "value": "1759412915661290999",
+    "domain": ".rutube.ru",
+    "path": "/",
+    "expires": 1790948915,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "None"
+  },
+  {
+    "name": "_ym_d",
+    "value": "1759412915",
+    "domain": ".rutube.ru",
+    "path": "/",
+    "expires": 1790948915,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "None"
+  },
+  {
+    "name": "_ym_isad",
+    "value": "2",
+    "domain": ".rutube.ru",
+    "path": "/",
+    "expires": 1759484915,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "None"
+  },
+  {
+    "name": "ea",
+    "value": "e91f7e62",
+    "domain": "rutube.ru",
+    "path": "/",
+    "expires": -1,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "None"
+  },
+  {
+    "name": "eg",
+    "value": "afb377d9",
+    "domain": "rutube.ru",
+    "path": "/",
+    "expires": -1,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "None"
+  },
+  {
+    "name": "puid_segments",
+    "value": "",
+    "domain": "rutube.ru",
+    "path": "/",
+    "expires": 1759499315,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "None"
+  },
+  {
+    "name": "v_did",
+    "value": "00000199a52e8e8bb023d08105bc6945",
+    "domain": "rutube.ru",
+    "path": "/play/embed/0814bbee853014d6601995e07948cd33",
+    "expires": -1,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "None"
+  },
+  {
+    "name": "session_id",
+    "value": "41129471421759412915_1759412915332",
+    "domain": ".rutube.ru",
+    "path": "/",
+    "expires": 1759414718,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "cid",
+    "value": "41129471421759412915",
+    "domain": ".rutube.ru",
+    "path": "/",
+    "expires": 1793972918,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "gi_u",
+    "value": "uMDUsDYAaXRp.AikABlGZpS6OgA",
+    "domain": ".adhigh.net",
+    "path": "/",
+    "expires": 1790948915,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "q_segs",
+    "value": "[]",
+    "domain": ".pretarg.adhigh.net",
+    "path": "/v1",
+    "expires": 1759499315,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "qvnt_sync",
+    "value": "LsDE",
+    "domain": ".adhigh.net",
+    "path": "/",
+    "expires": 1790948915,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  }
+]

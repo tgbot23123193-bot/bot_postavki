@@ -200,30 +200,66 @@ class WBBrowserAutomationPro:
         return '+7', clean_phone, 'Неопределенная страна'
     
     async def should_skip_login(self) -> bool:
-        """Проверяет нужно ли пропустить авторизацию (если сессия валидна)."""
+        """Проверяет нужно ли пропустить авторизацию (если есть валидная сессия с cookies)."""
         if not self.user_id:
             return False
         
         try:
-            # Проверяем есть ли валидная сессия в БД
-            is_valid = await db_service.is_browser_session_valid(self.user_id)
+            logger.info(f"🔍 Проверяю необходимость авторизации для пользователя {self.user_id}")
             
-            if is_valid:
-                logger.info(f"✅ Найдена валидная сессия для пользователя {self.user_id}")
-                # Дополнительно делаем быструю проверку браузера, если он работает
-                if self.page and not self.page.is_closed():
-                    try:
-                        await self._quick_browser_check()
-                        logger.info(f"✅ Быстрая проверка браузера выполнена для пользователя {self.user_id}")
-                    except Exception as e:
-                        logger.warning(f"⚠️ Быстрая проверка браузера не удалась: {e}, используем данные БД")
-                else:
-                    logger.info(f"✅ Браузер недоступен, используем данные БД для пользователя {self.user_id}")
-                
-                return True
-            else:
-                logger.info(f"❌ Валидная сессия не найдена для пользователя {self.user_id}")
+            # ШАГ 1: Проверяем наличие cookies в БД
+            cookies_json = await db_service.load_browser_cookies(self.user_id)
+            if not cookies_json:
+                logger.info(f"📭 Нет сохраненных cookies для пользователя {self.user_id} - требуется авторизация")
+                await db_service.update_browser_session_valid(self.user_id, False)
                 return False
+            
+            # ШАГ 2: Пробуем зайти на защищенную страницу WB с этими cookies
+            if self.page and not self.page.is_closed():
+                try:
+                    logger.info("🌐 Проверяю валидность cookies на странице WB...")
+                    
+                    # Переходим на страницу управления поставками (требует авторизации)
+                    await self.page.goto(
+                        "https://seller.wildberries.ru/supplies-management/all-supplies", 
+                        wait_until="networkidle", 
+                        timeout=15000
+                    )
+                    await asyncio.sleep(2)
+                    
+                    current_url = self.page.url
+                    logger.info(f"📍 Текущий URL: {current_url}")
+                    
+                    # Если редиректнуло на логин - cookies невалидны
+                    if any([
+                        'seller-auth.wildberries.ru' in current_url,
+                        'auth' in current_url.lower(),
+                        'login' in current_url.lower()
+                    ]):
+                        logger.info(f"❌ Cookies устарели для пользователя {self.user_id} (редирект на: {current_url})")
+                        await db_service.update_browser_session_valid(self.user_id, False)
+                        return False
+                    
+                    # Если остались на seller.wildberries.ru - авторизация валидна
+                    if 'seller.wildberries.ru' in current_url:
+                        logger.info(f"✅ Пользователь {self.user_id} АВТОРИЗОВАН! Cookies валидны.")
+                        await db_service.update_browser_session_valid(self.user_id, True)
+                        return True
+                    
+                    # Неизвестный URL - требуем авторизацию
+                    logger.warning(f"⚠️ Неожиданный URL: {current_url}")
+                    await db_service.update_browser_session_valid(self.user_id, False)
+                    return False
+                        
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка проверки авторизации через браузер: {e}")
+                    await db_service.update_browser_session_valid(self.user_id, False)
+                    return False
+            
+            # Если браузер недоступен
+            logger.warning("⚠️ Браузер недоступен для проверки cookies")
+            return False
+                
         except Exception as e:
             logger.error(f"❌ Ошибка проверки сессии: {e}")
             return False
@@ -469,55 +505,49 @@ class WBBrowserAutomationPro:
             await self.page.add_init_script(script)
     
     async def _load_cookies(self):
-        """ЗАГРУЖАЕМ СОХРАНЕННЫЕ КУКИ: СНАЧАЛА ИЗ БД, ПОТОМ ИЗ ФАЙЛА."""
+        """ЗАГРУЖАЕМ КУКИ ТОЛЬКО ИЗ БД ДЛЯ КОНКРЕТНОГО ПОЛЬЗОВАТЕЛЯ."""
         cookies_loaded = False
         
-        # ПРИОРИТЕТ 1: Загружаем из БД если есть user_id и валидная сессия
+        # Загружаем cookies ТОЛЬКО из БД для этого user_id
         if self.user_id:
             try:
-                session_data = await db_service.get_browser_session_data(self.user_id)
-                if session_data and session_data.get('session_valid'):
-                    logger.info(f"🔍 Найдена валидная сессия в БД для пользователя {self.user_id}")
-                    
-                    # Пытаемся загрузить куки из пути в БД
-                    cookies_file_from_db = session_data.get('cookies_file')
-                    if cookies_file_from_db and Path(cookies_file_from_db).exists():
-                        try:
-                            with open(cookies_file_from_db, 'r', encoding='utf-8') as f:
-                                cookies = json.load(f)
-                            await self.context.add_cookies(cookies)
-                            logger.info(f"🍪 Куки загружены из БД: {cookies_file_from_db}")
-                            cookies_loaded = True
-                        except Exception as e:
-                            logger.warning(f"⚠️ Ошибка загрузки куки из БД: {e}")
-                    else:
-                        logger.info(f"📁 Файл куков из БД не найден: {cookies_file_from_db}")
+                cookies_json = await db_service.load_browser_cookies(self.user_id)
+                if cookies_json:
+                    try:
+                        cookies = json.loads(cookies_json)
+                        await self.context.add_cookies(cookies)
+                        logger.info(f"🍪 Куки загружены из БД для пользователя {self.user_id}")
+                        cookies_loaded = True
+                    except Exception as e:
+                        logger.warning(f"⚠️ Ошибка парсинга куки из БД: {e}")
+                else:
+                    logger.info(f"📭 Нет сохраненных куки в БД для пользователя {self.user_id}")
             except Exception as e:
-                logger.warning(f"⚠️ Ошибка получения сессии из БД: {e}")
-        
-        # ПРИОРИТЕТ 2: Если из БД не загрузились - пытаемся из локального файла
-        if not cookies_loaded and self.cookies_file.exists():
-            try:
-                with open(self.cookies_file, 'r', encoding='utf-8') as f:
-                    cookies = json.load(f)
-                await self.context.add_cookies(cookies)
-                logger.info(f"🍪 Куки загружены из локального файла: {self.cookies_file}")
-                cookies_loaded = True
-            except Exception as e:
-                logger.warning(f"⚠️ Ошибка загрузки куки из файла: {e}")
+                logger.warning(f"⚠️ Ошибка загрузки куки из БД: {e}")
+        else:
+            logger.warning("⚠️ user_id не указан, пропускаем загрузку куки")
         
         if not cookies_loaded:
-            logger.info("🔄 Куки не найдены, начинаем с чистой сессии")
+            logger.info(f"🔄 Куки не найдены для пользователя {self.user_id}, начинаем с чистой сессии")
     
     async def _save_cookies(self):
-        """Сохраняем куки."""
+        """СОХРАНЯЕМ КУКИ ТОЛЬКО В БД ДЛЯ КОНКРЕТНОГО ПОЛЬЗОВАТЕЛЯ."""
+        if not self.user_id:
+            logger.warning("⚠️ user_id не указан, пропускаем сохранение куки")
+            return
+            
         try:
             cookies = await self.context.cookies()
-            with open(self.cookies_file, 'w', encoding='utf-8') as f:
-                json.dump(cookies, f, ensure_ascii=False, indent=2)
-            logger.info("🍪 Куки сохранены")
+            cookies_json = json.dumps(cookies, ensure_ascii=False)
+            
+            # Сохраняем ТОЛЬКО в БД
+            success = await db_service.save_browser_cookies(self.user_id, cookies_json)
+            if success:
+                logger.info(f"💾 Куки сохранены в БД для пользователя {self.user_id}")
+            else:
+                logger.error(f"❌ Ошибка сохранения куки в БД для пользователя {self.user_id}")
         except Exception as e:
-            logger.warning(f"⚠️ Ошибка сохранения куки: {e}")
+            logger.error(f"❌ Ошибка сохранения куки: {e}")
     
     async def _check_booking_success(self) -> Dict[str, Any]:
         """
@@ -2423,10 +2453,10 @@ class WBBrowserAutomationPro:
             except Exception as e:
                 logger.error(f"❌ Ошибка в попытке 1: {e}")
             
-            # Попытка 2: Если первая не сработала, пробуем полный номер
+            # Попытка 2: Если первая не сработала, пробуем еще раз чистый номер
             if not success:
                 try:
-                    logger.info(f"📱 Попытка 2: Ввод полного номера '{phone}'")
+                    logger.info(f"📱 Попытка 2: Повторный ввод чистого номера '{clean_number}'")
                     
                     # Очищаем поле
                     phone_element = await self.page.query_selector(phone_input)
@@ -2434,8 +2464,8 @@ class WBBrowserAutomationPro:
                     await phone_element.fill("")
                     await asyncio.sleep(0.5)
                     
-                    # Вводим полный номер
-                    await self._human_type(phone_input, phone)
+                    # Вводим чистый номер (БЕЗ кода страны, так как WB может его подставить автоматически)
+                    await self._human_type(phone_input, clean_number)
                     await asyncio.sleep(1)
                     
                     # Проверяем результат
@@ -2468,12 +2498,11 @@ class WBBrowserAutomationPro:
                 
                 try:
                     # Для российских номеров пробуем разные форматы
+                    # ВАЖНО: WB автоматически подставляет "+7", поэтому вводим БЕЗ кода страны
                     if country_code == '+7':
                         variants = [
-                            clean_number,  # 9001234567
-                            f"8{clean_number[1:]}",  # 89001234567 
-                            f"7{clean_number}",  # 79001234567
-                            f"+7{clean_number}"  # +79001234567
+                            clean_number,  # 9001234567 - основной вариант
+                            clean_number.replace(clean_number[0], '8', 1) if clean_number.startswith('9') else clean_number,  # 8001234567
                         ]
                     else:
                         variants = [

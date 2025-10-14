@@ -25,6 +25,458 @@ from ..keyboards.inline_redistribution import get_redistribution_menu, create_wa
 logger = get_logger(__name__)
 router = Router()
 
+# Глобальное хранилище активных задач перераспределения (до 3-х одновременно)
+active_redistribution_tasks = {}  # {user_id: {task_id: {task_data, asyncio.Task}}}
+
+class RedistributionTask:
+    """Класс для хранения информации об активной задаче перераспределения."""
+    def __init__(self, task_id: str, article: str, source_warehouse: dict, destination_warehouse: dict, quantity: int):
+        self.task_id = task_id
+        self.article = article
+        self.source_warehouse = source_warehouse
+        self.destination_warehouse = destination_warehouse
+        self.quantity = quantity
+        self.status = "⏳ Ждем запуска..."
+        self.attempts = 0
+        self.started_at = None
+        self.message_id = None
+        self.asyncio_task = None
+        self.page = None  # Своя вкладка браузера для этой задачи
+        
+    def to_dict(self):
+        return {
+            "task_id": self.task_id,
+            "article": self.article,
+            "source_warehouse": self.source_warehouse,
+            "destination_warehouse": self.destination_warehouse,
+            "quantity": self.quantity,
+            "status": self.status,
+            "attempts": self.attempts,
+            "message_id": self.message_id
+        }
+
+
+async def show_active_tasks_status(user_id: int, bot) -> str:
+    """Формирует текст со статусами всех активных задач пользователя."""
+    user_tasks = active_redistribution_tasks.get(user_id, {})
+    
+    if not user_tasks:
+        return (
+            "📋 <b>Активные задачи перераспределения</b>\n\n"
+            "У вас нет активных задач.\n\n"
+            "💡 Вы можете создать до 3-х задач одновременно."
+        )
+    
+    text = f"📋 <b>Активные задачи</b> ({len(user_tasks)}/3)\n\n"
+    
+    for task_id, task in user_tasks.items():
+        task_emoji = "🔄" if "ловлю" in task.status.lower() or "пробую" in task.status.lower() else "⏳"
+        text += (
+            f"{task_emoji} <b>Задача #{task.task_id}</b>\n"
+            f"📦 Артикул: <code>{task.article}</code>\n"
+            f"🏪 {task.source_warehouse['name']} → {task.destination_warehouse['name']}\n"
+            f"🔢 Количество: {task.quantity} шт\n"
+            f"📊 Попыток: {task.attempts}\n"
+            f"📌 Статус: {task.status}\n\n"
+        )
+    
+    if len(user_tasks) < 3:
+        text += "➕ Можете добавить еще задачи!"
+    else:
+        text += "⚠️ Достигнут лимит (3 задачи)"
+    
+    return text
+
+
+def get_tasks_management_keyboard(user_id: int):
+    """Создает клавиатуру для управления задачами."""
+    user_tasks = active_redistribution_tasks.get(user_id, {})
+    
+    keyboard = []
+    
+    # Кнопки остановки каждой задачи
+    for task_id, task in user_tasks.items():
+        keyboard.append([
+            InlineKeyboardButton(
+                text=f"🛑 Остановить #{task.task_id}",
+                callback_data=f"stop_task_{task.task_id}"
+            )
+        ])
+    
+    # Кнопка добавления новой задачи (если меньше 3)
+    if len(user_tasks) < 3:
+        keyboard.append([
+            InlineKeyboardButton(
+                text="➕ Добавить задачу",
+                callback_data=RedistributionCallback(action="start").pack()
+            )
+        ])
+    
+    # Кнопка главного меню
+    keyboard.append([
+        InlineKeyboardButton(
+            text="🏠 Главное меню",
+            callback_data="main_menu"
+        )
+    ])
+    
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+@router.callback_query(F.data == "show_active_tasks")
+async def show_active_tasks_handler(callback: CallbackQuery):
+    """Показывает все активные задачи перераспределения."""
+    await callback.answer()
+    user_id = callback.from_user.id
+    
+    status_text = await show_active_tasks_status(user_id, callback.bot)
+    keyboard = get_tasks_management_keyboard(user_id)
+    
+    await callback.message.edit_text(
+        status_text,
+        parse_mode="HTML",
+        reply_markup=keyboard
+    )
+
+
+@router.callback_query(F.data.startswith("stop_task_"))
+async def stop_task_handler(callback: CallbackQuery):
+    """Останавливает конкретную задачу."""
+    await callback.answer()
+    user_id = callback.from_user.id
+    task_id = callback.data.split("_")[2]
+    
+    user_tasks = active_redistribution_tasks.get(user_id, {})
+    
+    if task_id in user_tasks:
+        task = user_tasks[task_id]
+        
+        # Отменяем asyncio задачу
+        if task.asyncio_task and not task.asyncio_task.done():
+            task.asyncio_task.cancel()
+        
+        # Удаляем из хранилища
+        del user_tasks[task_id]
+        
+        if not user_tasks:
+            del active_redistribution_tasks[user_id]
+        
+        await callback.message.answer(
+            f"✅ <b>Задача #{task_id} остановлена</b>\n\n"
+            f"📦 Артикул: <code>{task.article}</code>\n"
+            f"📊 Было сделано попыток: {task.attempts}",
+            parse_mode="HTML"
+        )
+    
+    # Обновляем список задач
+    status_text = await show_active_tasks_status(user_id, callback.bot)
+    keyboard = get_tasks_management_keyboard(user_id)
+    
+    await callback.message.edit_text(
+        status_text,
+        parse_mode="HTML",
+        reply_markup=keyboard
+    )
+
+
+async def run_redistribution_task_in_background(user_id: int, task: RedistributionTask, bot):
+    """Запускает задачу перераспределения в фоновом режиме (в отдельной вкладке браузера)."""
+    from datetime import datetime
+    from ...utils.redistribution_config import RedistributionConfig
+    
+    task.started_at = datetime.now()
+    task.status = "🚀 Запускаю..."
+    
+    try:
+        logger.info(f"🚀 Запуск фоновой задачи #{task.task_id} для пользователя {user_id}")
+        
+        # Получаем или создаем браузер пользователя
+        browser = await browser_manager.get_browser(user_id, headless=False)
+        if not browser:
+            logger.error(f"❌ Не удалось запустить браузер для пользователя {user_id}")
+            task.status = "❌ Ошибка запуска браузера"
+            
+            await bot.send_message(
+                user_id,
+                f"❌ <b>Ошибка запуска задачи #{task.task_id}</b>\n\n"
+                f"Не удалось запустить браузер.\n"
+                f"Попробуйте перезапустить бота.",
+                parse_mode="HTML"
+            )
+            return
+        
+        logger.info(f"✅ Браузер готов для задачи #{task.task_id}")
+        
+        # Создаем новую вкладку для этой задачи
+        task.page = await browser_manager.create_new_tab(user_id)
+        if not task.page:
+            logger.error(f"❌ Не удалось создать вкладку для задачи #{task.task_id}")
+            task.status = "❌ Ошибка создания вкладки"
+            
+            await bot.send_message(
+                user_id,
+                f"❌ <b>Ошибка запуска задачи #{task.task_id}</b>\n\n"
+                f"Не удалось создать вкладку браузера.",
+                parse_mode="HTML"
+            )
+            return
+        
+        logger.info(f"📄 Задача #{task.task_id}: вкладка создана")
+        
+        # Открываем страницу ПЕРЕРАСПРЕДЕЛЕНИЯ в этой вкладке
+        try:
+            await task.page.goto("https://seller.wildberries.ru/analytics-reports/warehouse-remains", wait_until="networkidle", timeout=30000)
+            logger.info(f"🌐 Задача #{task.task_id}: страница перераспределения открыта")
+        except Exception as e:
+            logger.error(f"❌ Не удалось открыть страницу WB для задачи #{task.task_id}: {e}")
+            task.status = "❌ Ошибка открытия страницы"
+            
+            await bot.send_message(
+                user_id,
+                f"❌ <b>Ошибка запуска задачи #{task.task_id}</b>\n\n"
+                f"Не удалось открыть страницу WB.\n"
+                f"Детали: {str(e)[:100]}",
+                parse_mode="HTML"
+            )
+            
+            # Закрываем вкладку
+            try:
+                await task.page.close()
+            except:
+                pass
+            return
+        
+        logger.info(f"📄 Задача #{task.task_id} работает в своей вкладке")
+        
+        attempts = 0
+        max_attempts = RedistributionConfig.get_max_attempts()
+        
+        # Если max_attempts = 0, ловим бесконечно
+        infinite_mode = (max_attempts == 0)
+        if infinite_mode:
+            logger.info(f"♾️ Задача #{task.task_id}: БЕСКОНЕЧНЫЙ РЕЖИМ (max_attempts=0)")
+        else:
+            logger.info(f"🎯 Задача #{task.task_id}: Максимум {max_attempts} попыток")
+        
+        redistribution_service = get_redistribution_service(browser_manager, fast_mode=True)
+        
+        while infinite_mode or attempts < max_attempts:
+            # Проверяем, не отменена ли задача
+            user_tasks = active_redistribution_tasks.get(user_id, {})
+            if task.task_id not in user_tasks:
+                logger.info(f"❌ Задача #{task.task_id} отменена пользователем")
+                break
+            
+            attempts += 1
+            task.attempts = attempts
+            
+            # Определяем режим работы
+            in_active_period = RedistributionConfig.is_in_booking_period()
+            current_retry_seconds = RedistributionConfig.get_current_retry_seconds()
+            
+            if in_active_period:
+                task.status = f"🔥 Попытка #{attempts} (активный, каждые {current_retry_seconds}с)"
+            else:
+                minutes_until_active = RedistributionConfig.minutes_until_next_period()
+                task.status = f"⏳ Попытка #{attempts} (до активного: {minutes_until_active} мин, каждые {current_retry_seconds//60}м)"
+            
+            logger.info(f"🎯 Задача #{task.task_id}: попытка #{attempts}")
+            
+            try:
+                # Создаем временный объект-обертку для браузера с нужной страницей
+                class BrowserWithCustomPage:
+                    def __init__(self, original_browser, custom_page):
+                        self._original_browser = original_browser
+                        self.page = custom_page
+                        # Прокидываем все основные атрибуты
+                        self.context = original_browser.context
+                        self.playwright = original_browser.playwright
+                        self.browser = original_browser.browser
+                        self.user_id = original_browser.user_id
+                        # Безопасно прокидываем необязательные атрибуты
+                        self.save_state_on_exit = getattr(original_browser, 'save_state_on_exit', True)
+                        self.cookies_file = getattr(original_browser, 'cookies_file', None)
+                        self.headless = getattr(original_browser, 'headless', False)
+                        self.debug_mode = getattr(original_browser, 'debug_mode', False)
+                        
+                    def __getattr__(self, name):
+                        # Для всех остальных атрибутов используем оригинальный браузер
+                        return getattr(self._original_browser, name)
+                
+                # Создаем временный браузер с нужной страницей для этой задачи
+                task_browser = BrowserWithCustomPage(browser, task.page)
+                
+                # Создаем ВИРТУАЛЬНЫЙ user_id для этой задачи чтобы не конфликтовать с другими
+                virtual_user_id = user_id * 1000 + int(task.task_id)
+                
+                # Регистрируем виртуальный браузер для этой задачи
+                browser_manager._browsers[virtual_user_id] = task_browser
+                
+                logger.info(f"📄 Задача #{task.task_id}: используется вкладка {id(task.page)}, виртуальный ID: {virtual_user_id}")
+                logger.info(f"🔍 HANDLER: Зарегистрирован browser для virtual_user_id={virtual_user_id}, page.url={task.page.url}")
+                
+                # Проверяем что браузер действительно зарегистрирован
+                test_browser = browser_manager._browsers.get(virtual_user_id)
+                if test_browser:
+                    logger.info(f"✅ HANDLER: Браузер найден для {virtual_user_id}, page_id={id(test_browser.page)}")
+                else:
+                    logger.error(f"❌ HANDLER: Браузер НЕ найден для {virtual_user_id}!")
+                
+                try:
+                    # Выполняем попытку перераспределения с ВИРТУАЛЬНЫМ user_id (каждая задача изолирована)
+                    await redistribution_service.close_and_reopen_redistribution(virtual_user_id, task.article)
+                    
+                    select_result = await redistribution_service.select_warehouse(virtual_user_id, task.source_warehouse)
+                    if not select_result["success"]:
+                        if select_result.get("warehouse_not_in_list"):
+                            raise Exception(f"Склад '{task.source_warehouse['name']}' недоступен")
+                        else:
+                            raise Exception(f"Ошибка выбора склада: {select_result.get('error')}")
+                    
+                    dest_result = await redistribution_service.select_destination_warehouse(virtual_user_id, task.destination_warehouse)
+                    if not dest_result["success"]:
+                        if dest_result.get("warehouse_not_in_list"):
+                            raise Exception(f"Склад назначения '{task.destination_warehouse['name']}' недоступен")
+                        else:
+                            raise Exception(f"Ошибка выбора склада назначения: {dest_result.get('error')}")
+                    
+                    input_result = await redistribution_service.input_quantity(virtual_user_id, task.quantity)
+                    
+                    if input_result["success"] and input_result.get("redistribute_clicked"):
+                        # УСПЕХ!
+                        task.status = "🎉 ПОЙМАНА!"
+                        logger.info(f"🎉 Задача #{task.task_id} успешно выполнена!")
+                        
+                        # Отправляем уведомление пользователю
+                        await bot.send_message(
+                            user_id,
+                            f"🎉 <b>ПОСТАВКА ПОЙМАНА!</b>\n\n"
+                            f"✅ <b>Задача #{task.task_id}</b>\n"
+                            f"📦 Артикул: <code>{task.article}</code>\n"
+                            f"🏪 {task.source_warehouse['name']} → {task.destination_warehouse['name']}\n"
+                            f"🔢 Количество: {task.quantity} шт\n"
+                            f"🎯 Попытка #{attempts} успешна!",
+                            parse_mode="HTML"
+                        )
+                        
+                        # Закрываем вкладку задачи
+                        await task.page.close()
+                        
+                        # Удаляем виртуальный браузер
+                        if virtual_user_id in browser_manager._browsers:
+                            del browser_manager._browsers[virtual_user_id]
+                        
+                        # Удаляем задачу из активных
+                        user_tasks = active_redistribution_tasks.get(user_id, {})
+                        if task.task_id in user_tasks:
+                            del user_tasks[task.task_id]
+                        if not user_tasks:
+                            del active_redistribution_tasks[user_id]
+                        
+                        return
+                    else:
+                        raise Exception(input_result.get('error', 'Не удалось забронировать'))
+                
+                finally:
+                    # Удаляем виртуальный браузер из менеджера
+                    if virtual_user_id in browser_manager._browsers:
+                        del browser_manager._browsers[virtual_user_id]
+                    
+            except Exception as e:
+                error_msg = str(e)
+                logger.info(f"❌ Задача #{task.task_id} попытка #{attempts}: {error_msg}")
+                
+                if "недоступен" in error_msg.lower():
+                    task.status = f"📦 Попытка #{attempts}: Склад недоступен"
+                elif "лимит" in error_msg.lower():
+                    task.status = f"⏰ Попытка #{attempts}: Лимит исчерпан"
+                else:
+                    task.status = f"❌ Попытка #{attempts}: Ошибка"
+            
+            # Ждем перед следующей попыткой
+            await asyncio.sleep(current_retry_seconds)
+        
+        # Достигнут лимит попыток
+        task.status = f"⚠️ Лимит попыток ({attempts})"
+        logger.warning(f"⚠️ Задача #{task.task_id} достигла лимита попыток")
+        
+        # Закрываем вкладку
+        if task.page:
+            try:
+                await task.page.close()
+                logger.info(f"📄 Вкладка задачи #{task.task_id} закрыта")
+            except:
+                pass
+        
+        # Очищаем виртуальный браузер если остался
+        virtual_user_id = user_id * 1000 + int(task.task_id)
+        if virtual_user_id in browser_manager._browsers:
+            del browser_manager._browsers[virtual_user_id]
+        
+        await bot.send_message(
+            user_id,
+            f"⚠️ <b>Задача #{task.task_id} завершена</b>\n\n"
+            f"📦 Артикул: <code>{task.article}</code>\n"
+            f"📊 Достигнут лимит попыток: {attempts}",
+            parse_mode="HTML"
+        )
+        
+        # Удаляем задачу
+        user_tasks = active_redistribution_tasks.get(user_id, {})
+        if task.task_id in user_tasks:
+            del user_tasks[task.task_id]
+        if not user_tasks:
+            del active_redistribution_tasks[user_id]
+        
+    except asyncio.CancelledError:
+        logger.info(f"🛑 Задача #{task.task_id} отменена")
+        task.status = "🛑 Отменена"
+        
+        # Закрываем вкладку
+        if task.page:
+            try:
+                await task.page.close()
+                logger.info(f"📄 Вкладка задачи #{task.task_id} закрыта (отмена)")
+            except:
+                pass
+        
+        # Очищаем виртуальный браузер
+        virtual_user_id = user_id * 1000 + int(task.task_id)
+        if virtual_user_id in browser_manager._browsers:
+            del browser_manager._browsers[virtual_user_id]
+                
+    except Exception as e:
+        logger.error(f"❌ Критическая ошибка в задаче #{task.task_id}: {e}")
+        task.status = "❌ Критическая ошибка"
+        
+        # Закрываем вкладку
+        if task.page:
+            try:
+                await task.page.close()
+                logger.info(f"📄 Вкладка задачи #{task.task_id} закрыта (ошибка)")
+            except:
+                pass
+        
+        # Очищаем виртуальный браузер
+        virtual_user_id = user_id * 1000 + int(task.task_id)
+        if virtual_user_id in browser_manager._browsers:
+            del browser_manager._browsers[virtual_user_id]
+        
+        await bot.send_message(
+            user_id,
+            f"❌ <b>Ошибка в задаче #{task.task_id}</b>\n\n"
+            f"📦 Артикул: <code>{task.article}</code>\n"
+            f"💬 {str(e)[:200]}",
+            parse_mode="HTML"
+        )
+        
+        # Удаляем задачу при ошибке
+        user_tasks = active_redistribution_tasks.get(user_id, {})
+        if task.task_id in user_tasks:
+            del user_tasks[task.task_id]
+        if not user_tasks:
+            del active_redistribution_tasks[user_id]
+
 
 @router.callback_query(F.data == "redistrib_wait_31min")
 async def wait_31_minutes_retry(callback: CallbackQuery, state: FSMContext):
@@ -351,26 +803,41 @@ async def show_redistribution_menu(callback: CallbackQuery):
             await callback.answer()
             return
         
-        # Все проверки пройдены - показываем меню
-        last_login = browser_session.last_successful_login
-        login_info = f"Последняя авторизация: {last_login.strftime('%d.%m.%Y %H:%M')}" if last_login else "Данные авторизации отсутствуют"
+        # Проверяем есть ли активные задачи перераспределения
+        user_tasks = active_redistribution_tasks.get(user_id, {})
         
-        menu_text = (
-            "🔄 <b>Перераспределение остатков</b>\n\n"
-            "Автоматизация работы со страницей:\n"
-            "📋 Отчет по остаткам на складе\n\n"
-            f"✅ Браузерная сессия активна\n"
-            f"✅ Авторизация в WB подтверждена\n"
-            f"📅 {login_info}\n\n"
-            "Выберите действие:"
-        )
-        
-        await callback.message.edit_text(
-            menu_text,
-            parse_mode="HTML",
-            reply_markup=get_redistribution_menu()
-        )
-        await callback.answer()
+        if user_tasks:
+            # Есть активные задачи - показываем их статус
+            status_text = await show_active_tasks_status(user_id, callback.bot)
+            keyboard = get_tasks_management_keyboard(user_id)
+            
+            await callback.message.edit_text(
+                status_text,
+                parse_mode="HTML",
+                reply_markup=keyboard
+            )
+            await callback.answer()
+        else:
+            # Нет активных задач - показываем обычное меню
+            last_login = browser_session.last_successful_login
+            login_info = f"Последняя авторизация: {last_login.strftime('%d.%m.%Y %H:%M')}" if last_login else "Данные авторизации отсутствуют"
+            
+            menu_text = (
+                "🔄 <b>Перераспределение остатков</b>\n\n"
+                "Автоматизация работы со страницей:\n"
+                "📋 Отчет по остаткам на складе\n\n"
+                f"✅ Браузерная сессия активна\n"
+                f"✅ Авторизация в WB подтверждена\n"
+                f"📅 {login_info}\n\n"
+                "Выберите действие:"
+            )
+            
+            await callback.message.edit_text(
+                menu_text,
+                parse_mode="HTML",
+                reply_markup=get_redistribution_menu()
+            )
+            await callback.answer()
         
     except Exception as e:
         logger.error(f"❌ Ошибка при показе меню перераспределения: {e}")
@@ -1072,9 +1539,16 @@ async def start_redistribution_cycle(message: Message, state: FSMContext):
         attempts = 0
         max_attempts = RedistributionConfig.get_max_attempts()
         
+        # Если max_attempts = 0, ловим бесконечно
+        infinite_mode = (max_attempts == 0)
+        if infinite_mode:
+            logger.info(f"♾️ БЕСКОНЕЧНЫЙ РЕЖИМ (max_attempts=0)")
+        else:
+            logger.info(f"🎯 Максимум {max_attempts} попыток")
+        
         redistribution_service = get_redistribution_service(browser_manager, fast_mode=True)
         
-        while attempts < max_attempts:
+        while infinite_mode or attempts < max_attempts:
             # Проверяем, не отменил ли пользователь
             current_state = await state.get_state()
             if current_state != RedistributionStates.processing_redistribution.state:
@@ -1084,13 +1558,13 @@ async def start_redistribution_cycle(message: Message, state: FSMContext):
             
             # Определяем текущий интервал и режим
             in_active_period = RedistributionConfig.is_in_booking_period()
-            current_retry_interval = RedistributionConfig.get_current_retry_interval()
+            current_retry_seconds = RedistributionConfig.get_current_retry_seconds()
             
             # Показываем статус с информацией о режиме
             if in_active_period:
-                mode_text = f"🔥 <b>АКТИВНЫЙ РЕЖИМ</b> (каждую {current_retry_interval} мин)"
+                mode_text = f"🔥 <b>АКТИВНЫЙ РЕЖИМ</b> (каждые {current_retry_seconds} сек)"
             else:
-                mode_text = f"⏳ <b>ОБЫЧНЫЙ РЕЖИМ</b> (каждые {current_retry_interval} мин)"
+                mode_text = f"⏳ <b>ОБЫЧНЫЙ РЕЖИМ</b> (каждые {current_retry_seconds//60} мин)"
                 minutes_until_active = RedistributionConfig.minutes_until_next_period()
                 mode_text += f"\n⏰ До активного периода: {minutes_until_active} мин"
             
@@ -1195,7 +1669,7 @@ async def start_redistribution_cycle(message: Message, state: FSMContext):
                 )
             
             # Ждем перед следующей попыткой (динамический интервал)
-            await asyncio.sleep(current_retry_interval * 60)
+            await asyncio.sleep(current_retry_seconds)
         
         # Достигнут лимит попыток - закрываем браузер
         try:
@@ -1285,11 +1759,75 @@ async def process_quantity_input(message: Message, state: FSMContext):
             )
             return
         
-        # Сохраняем количество и запускаем цикл
+        # Сохраняем количество
         await state.update_data(quantity=quantity)
         
-        # Запускаем цикл охоты за поставкой
-        await start_redistribution_cycle(message, state)
+        # Проверяем, сколько уже активных задач
+        if user_id not in active_redistribution_tasks:
+            active_redistribution_tasks[user_id] = {}
+        
+        user_tasks = active_redistribution_tasks[user_id]
+        
+        if len(user_tasks) >= 3:
+            await message.answer(
+                "⚠️ <b>Достигнут лимит задач</b>\n\n"
+                "У вас уже запущено 3 задачи перераспределения.\n"
+                "Дождитесь завершения хотя бы одной или остановите её.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="📋 Активные задачи", callback_data="show_active_tasks")],
+                    [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")]
+                ])
+            )
+            return
+        
+        # Создаем новую задачу
+        task_id = str(len(user_tasks) + 1)
+        task = RedistributionTask(
+            task_id=task_id,
+            article=article,
+            source_warehouse=source_warehouse,
+            destination_warehouse=destination_warehouse,
+            quantity=quantity
+        )
+        
+        # Добавляем в хранилище
+        user_tasks[task_id] = task
+        
+        # Показываем сообщение "Запускаю перераспределение"
+        start_message = await message.answer(
+            f"🚀 <b>Запускаю перераспределение</b>\n\n"
+            f"✅ <b>Задача #{task_id} создана</b>\n"
+            f"📦 Артикул: <code>{article}</code>\n"
+            f"🏪 Откуда: <b>{source_warehouse['name']}</b>\n"
+            f"📦 Куда: <b>{destination_warehouse['name']}</b>\n"
+            f"🔢 Количество: <b>{quantity}</b> шт\n\n"
+            f"⏳ Инициализация...",
+            parse_mode="HTML"
+        )
+        
+        task.message_id = start_message.message_id
+        
+        # Запускаем задачу в фоне
+        task.asyncio_task = asyncio.create_task(
+            run_redistribution_task_in_background(user_id, task, message.bot)
+        )
+        
+        # Ждем немного чтобы задача начала работать
+        await asyncio.sleep(2)
+        
+        # Показываем статус всех задач
+        status_text = await show_active_tasks_status(user_id, message.bot)
+        keyboard = get_tasks_management_keyboard(user_id)
+        
+        await message.answer(
+            status_text,
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
+        
+        # Очищаем состояние FSM
+        await state.clear()
         
     except ValueError:
         await message.answer(
@@ -1316,9 +1854,12 @@ async def stop_redistribution_hunt(callback: CallbackQuery, state: FSMContext):
     # Закрываем браузер при остановке
     try:
         logger.info(f"🛑 Пользователь {user_id} остановил охоту. Закрываем браузер...")
-        browser_manager = BrowserManager()
-        await browser_manager.close_browser(user_id)
-        logger.info("✅ Браузер успешно закрыт при остановке охоты")
+        # ИСПОЛЬЗУЕМ ГЛОБАЛЬНЫЙ browser_manager вместо создания нового!
+        if browser_manager:
+            await browser_manager.close_browser(user_id)
+            logger.info("✅ Браузер успешно закрыт при остановке охоты")
+        else:
+            logger.warning("⚠️ browser_manager не инициализирован")
     except Exception as browser_error:
         logger.warning(f"⚠️ Не удалось закрыть браузер при остановке: {browser_error}")
     

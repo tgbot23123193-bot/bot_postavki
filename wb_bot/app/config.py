@@ -98,7 +98,7 @@ class MonitoringSettings(BaseSettings):
     """Monitoring and performance settings."""
     
     min_check_interval: int = Field(default=30, description="Minimum check interval in seconds")
-    max_check_interval: int = Field(default=1, description="Maximum check interval in seconds")
+    max_check_interval: int = Field(default=300, description="Maximum check interval in seconds")
     default_check_interval: int = Field(default=5, description="Default check interval in seconds")
     cache_ttl: int = Field(default=5, description="Cache TTL in seconds")
     max_concurrent_requests: int = Field(default=1000, description="Max concurrent requests")

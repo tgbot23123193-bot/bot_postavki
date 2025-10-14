@@ -389,7 +389,8 @@ class BrowserSession(Base):
     
     # Метаданные сессии
     user_data_dir = Column(String(500), nullable=True)  # Путь к папке с данными браузера
-    cookies_file = Column(String(500), nullable=True)  # Путь к файлу с куками
+    cookies_file = Column(String(500), nullable=True)  # Путь к файлу с куками (устаревшее)
+    cookies_data = Column(Text, nullable=True)  # JSON с cookies (актуальное хранилище)
     
     # Информация об авторизации
     wb_login_success = Column(Boolean, default=False)  # Успешная авторизация в WB

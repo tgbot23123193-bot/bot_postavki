@@ -25,7 +25,7 @@ except ImportError:
 from .config import get_settings
 from .database import init_database, close_database
 from .services.monitoring import start_monitoring_service, stop_monitoring_service
-from .services.browser_manager import BrowserManager
+from .services.browser_manager import browser_manager, BrowserManager  # ИСПОЛЬЗУЕМ ГЛОБАЛЬНЫЙ ЭКЗЕМПЛЯР!
 from .services.multi_booking_manager import MultiBookingManager
 from .utils.logger import setup_logging, get_logger
 from .bot.handlers import routers
@@ -66,8 +66,8 @@ class BotApplication:
         """Initialize bot application."""
         self.settings = get_settings()
         
-        # Создаем синглтон менеджеры для мультибронирования
-        self.browser_manager = BrowserManager()
+        # ИСПОЛЬЗУЕМ ГЛОБАЛЬНЫЙ ЭКЗЕМПЛЯР browser_manager для мультисессии!
+        self.browser_manager = browser_manager  # Глобальный синглтон
         self.multi_booking_manager = MultiBookingManager(self.browser_manager)
         self.bot: Bot = None
         self.dp: Dispatcher = None

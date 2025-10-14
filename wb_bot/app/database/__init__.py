@@ -1,7 +1,7 @@
 """Database package initialization."""
 
 from .models import Base, User, APIKey, MonitoringTask, BookingResult
-from .connection import DatabaseManager, get_session, init_database, close_database
+from .connection import DatabaseManager, get_session, init_database, close_database, health_check
 
 __all__ = [
     "Base",
@@ -13,4 +13,5 @@ __all__ = [
     "get_session",
     "init_database",
     "close_database",
+    "health_check",
 ]

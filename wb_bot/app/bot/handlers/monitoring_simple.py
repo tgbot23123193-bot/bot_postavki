@@ -44,6 +44,7 @@ async def show_monitoring_options(callback: CallbackQuery):
     ])
     
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+    await callback.answer()
 
 
 @router.callback_query(F.data == "quick_search")

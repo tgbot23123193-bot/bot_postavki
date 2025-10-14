@@ -526,6 +526,95 @@ class DatabaseService:
             logger.error(f"Unexpected error in get_browser_session_data: {e}")
             return None
     
+    async def update_browser_session_valid(self, user_id: int, is_valid: bool) -> bool:
+        """Обновить статус валидности браузерной сессии."""
+        try:
+            async with get_session() as session:
+                stmt = select(BrowserSession).where(BrowserSession.user_id == user_id)
+                result = await session.execute(stmt)
+                browser_session = result.scalar_one_or_none()
+                
+                if not browser_session:
+                    if is_valid:
+                        # Создаем новую сессию если её нет и статус валидный
+                        browser_session = await self.get_or_create_browser_session(user_id)
+                        if not browser_session:
+                            return False
+                    else:
+                        # Если сессии нет и статус невалидный - ничего не делаем
+                        return True
+                
+                # Обновляем статус
+                browser_session.session_valid = is_valid
+                if is_valid:
+                    browser_session.last_successful_login = datetime.utcnow()
+                
+                await session.commit()
+                logger.info(f"Updated browser session valid status for user {user_id}: {is_valid}")
+                return True
+                
+        except SQLAlchemyError as e:
+            logger.error(f"Database error in update_browser_session_valid: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error in update_browser_session_valid: {e}")
+            return False
+    
+    async def save_browser_cookies(self, user_id: int, cookies_json: str) -> bool:
+        """Сохранить cookies в БД для пользователя."""
+        try:
+            async with get_session() as session:
+                stmt = select(BrowserSession).where(BrowserSession.user_id == user_id)
+                result = await session.execute(stmt)
+                browser_session = result.scalar_one_or_none()
+                
+                if not browser_session:
+                    # Создаем новую сессию
+                    browser_session = await self.get_or_create_browser_session(user_id)
+                    if not browser_session:
+                        return False
+                    # Нужно получить сессию заново для обновления
+                    stmt = select(BrowserSession).where(BrowserSession.user_id == user_id)
+                    result = await session.execute(stmt)
+                    browser_session = result.scalar_one_or_none()
+                
+                # Сохраняем cookies
+                browser_session.cookies_data = cookies_json
+                browser_session.last_login_check = datetime.utcnow()
+                
+                await session.commit()
+                logger.info(f"💾 Cookies сохранены в БД для пользователя {user_id}")
+                return True
+                
+        except SQLAlchemyError as e:
+            logger.error(f"Database error in save_browser_cookies: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error in save_browser_cookies: {e}")
+            return False
+    
+    async def load_browser_cookies(self, user_id: int) -> Optional[str]:
+        """Загрузить cookies из БД для пользователя."""
+        try:
+            async with get_session() as session:
+                stmt = select(BrowserSession).where(BrowserSession.user_id == user_id)
+                result = await session.execute(stmt)
+                browser_session = result.scalar_one_or_none()
+                
+                if browser_session and browser_session.cookies_data:
+                    logger.info(f"🍪 Cookies загружены из БД для пользователя {user_id}")
+                    return browser_session.cookies_data
+                else:
+                    logger.info(f"📭 Нет сохраненных cookies в БД для пользователя {user_id}")
+                    return None
+                    
+        except SQLAlchemyError as e:
+            logger.error(f"Database error in load_browser_cookies: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error in load_browser_cookies: {e}")
+            return None
+    
     async def get_user_api_keys(self, user_id: int) -> List[APIKey]:
         """Получает все API ключи пользователя."""
         try:

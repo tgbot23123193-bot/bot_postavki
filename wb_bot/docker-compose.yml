@@ -51,7 +51,7 @@ services:
     container_name: wb_bot_app
     environment:
       # Database configuration
-      DB_URL: postgresql+asyncpg://wb_user:${DB_PASSWORD:-secure_password_change_me}@postgres:5432/wb_bot
+      DB_URL: postgresql+asyncpg://postgres:KulZLGinDnnRgWXgAWOmagjVMLLQRmoG@gondola.proxy.rlwy.net:24819/railway
       DB_ECHO: ${DB_ECHO:-false}
       DB_POOL_SIZE: ${DB_POOL_SIZE:-20}
       DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-30}
@@ -130,7 +130,7 @@ services:
       target: production
     container_name: wb_bot_migration
     environment:
-      DB_URL: postgresql+asyncpg://wb_user:${DB_PASSWORD:-secure_password_change_me}@postgres:5432/wb_bot
+      DB_URL: postgresql+asyncpg://postgres:KulZLGinDnnRgWXgAWOmagjVMLLQRmoG@gondola.proxy.rlwy.net:24819/railway
     command: ["alembic", "upgrade", "head"]
     volumes:
       - ./alembic:/app/alembic:ro

@@ -95,6 +95,22 @@ class BrowserManager:
             
             return False
     
+    async def create_new_tab(self, user_id: int):
+        """Создает новую вкладку в браузере пользователя и возвращает Page."""
+        browser = self._browsers.get(user_id)
+        if not browser or not browser.context:
+            logger.error(f"❌ Браузер для пользователя {user_id} не найден")
+            return None
+        
+        try:
+                # Создаем новую страницу (вкладку) в существующем контексте
+                new_page = await browser.context.new_page()
+                logger.info(f"📄 Создана новая вкладка для пользователя {user_id} (ID: {id(new_page)})")
+                return new_page
+        except Exception as e:
+            logger.error(f"❌ Ошибка создания новой вкладки: {e}")
+            return None
+    
     async def create_session_clone(self, source_user_id: int, target_user_id: int, browser_type: str = "firefox") -> Optional[WBBrowserAutomationPro]:
         """
         Создает клон браузера с той же сессией для мультибронирования.

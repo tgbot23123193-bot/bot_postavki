@@ -34,6 +34,12 @@ def get_redistribution_menu() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(
+                text="📋 Активные задачи (до 3)",
+                callback_data="show_active_tasks"
+            )
+        ],
+        [
+            InlineKeyboardButton(
                 text="🚀 Открыть страницу перераспределения",
                 callback_data="open_redistribution_page"
             )

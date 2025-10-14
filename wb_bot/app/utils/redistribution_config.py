@@ -31,12 +31,22 @@ class RedistributionConfig:
     
     @staticmethod
     def get_retry_minutes() -> int:
-        """Получает время ожидания между попытками ВНЕ активных периодов в минутах."""
+        """Получает время ожидания между попытками ВНЕ активных периодов в минутах (устарело, используйте get_retry_seconds)."""
         return int(os.getenv('REDISTRIBUTION_RETRY_MINUTES', '31'))
     
     @staticmethod
+    def get_retry_seconds() -> int:
+        """Получает время ожидания между попытками ВНЕ активных периодов в СЕКУНДАХ."""
+        return int(os.getenv('REDISTRIBUTION_RETRY_SECONDS', '35'))
+    
+    @staticmethod
+    def get_active_retry_seconds() -> int:
+        """Получает время ожидания между попытками В активных периодах в СЕКУНДАХ."""
+        return int(os.getenv('REDISTRIBUTION_ACTIVE_RETRY_SECONDS', '15'))
+    
+    @staticmethod
     def get_active_retry_minutes() -> int:
-        """Получает время ожидания между попытками В активных периодах в минутах."""
+        """Получает время ожидания между попытками В активных периодах в минутах (устарело, используйте get_active_retry_seconds)."""
         return int(os.getenv('REDISTRIBUTION_ACTIVE_RETRY_MINUTES', '1'))
     
     @staticmethod
@@ -112,9 +122,22 @@ class RedistributionConfig:
         Возвращает текущий интервал повтора в зависимости от времени.
         
         Returns:
-            int: Интервал в минутах (1 в активные периоды, 31 вне периодов)
+            int: Интервал в минутах (устарело, используйте get_current_retry_seconds)
         """
         if RedistributionConfig.is_in_booking_period():
             return RedistributionConfig.get_active_retry_minutes()  # 1 минута в активные периоды
         else:
             return RedistributionConfig.get_retry_minutes()  # 31 минута вне периодов
+    
+    @staticmethod
+    def get_current_retry_seconds() -> int:
+        """
+        Возвращает текущий интервал повтора в СЕКУНДАХ.
+        
+        Returns:
+            int: Интервал в секундах (15 в активные периоды, 30-40 вне периодов)
+        """
+        if RedistributionConfig.is_in_booking_period():
+            return RedistributionConfig.get_active_retry_seconds()  # 15 секунд в активные периоды
+        else:
+            return RedistributionConfig.get_retry_seconds()  # 30-40 секунд вне периодов

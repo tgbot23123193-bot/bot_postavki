@@ -384,7 +384,24 @@ class WBRedistributionService:
                     "error": "Активная страница не найдена"
                 }
             
-            # Ищем и кликаем по кнопке перераспределения
+            # ШАГ 1: ОБНОВЛЯЕМ СТРАНИЦУ ЧЕРЕЗ CTRL+SHIFT+R (жесткая перезагрузка) 🔄
+            logger.info(f"🔄 Обновляем страницу через Ctrl+Shift+R...")
+            try:
+                # Жесткая перезагрузка страницы (очистка кеша + обновление)
+                await page.reload(wait_until="networkidle", timeout=15000)
+                logger.info("✅ Страница успешно обновлена!")
+                await asyncio.sleep(1)  # Ждем стабилизации после обновления
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка при обновлении страницы: {e}")
+                # Пробуем альтернативный способ - через keyboard
+                try:
+                    await page.keyboard.press("Control+Shift+R")
+                    logger.info("✅ Отправлен Ctrl+Shift+R")
+                    await asyncio.sleep(3)  # Ждем перезагрузки
+                except Exception as e2:
+                    logger.warning(f"⚠️ Ошибка при отправке Ctrl+Shift+R: {e2}")
+            
+            # ШАГ 2: Ищем и кликаем по кнопке перераспределения
             redistribution_selectors = [
                 'button:has-text("Перераспределить остатки")',
                 'button:has-text("Перераспределить")',
@@ -464,6 +481,23 @@ class WBRedistributionService:
                     "error": "Страница браузера недоступна",
                     "user_id": user_id
                 }
+            
+            # ШАГ 0: ОБНОВЛЯЕМ СТРАНИЦУ ЧЕРЕЗ CTRL+SHIFT+R (жесткая перезагрузка) 🔄
+            logger.info(f"🔄 Обновляем страницу через Ctrl+Shift+R перед открытием меню...")
+            try:
+                # Жесткая перезагрузка страницы (очистка кеша + обновление)
+                await page.reload(wait_until="networkidle", timeout=15000)
+                logger.info("✅ Страница успешно обновлена!")
+                await asyncio.sleep(1)  # Ждем стабилизации после обновления
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка при обновлении страницы: {e}")
+                # Пробуем альтернативный способ - через keyboard
+                try:
+                    await page.keyboard.press("Control+Shift+R")
+                    logger.info("✅ Отправлен Ctrl+Shift+R")
+                    await asyncio.sleep(3)  # Ждем перезагрузки
+                except Exception as e2:
+                    logger.warning(f"⚠️ Ошибка при отправке Ctrl+Shift+R: {e2}")
             
             # Шаг 1: Ищем и кликаем кнопку "Перенести поставку"
             transfer_selectors = [
@@ -2001,12 +2035,30 @@ class WBRedistributionService:
                 }
             
             page = browser.page
+            logger.info(f"🔍 REDISTRIBUTION SERVICE: user_id={user_id}, page_id={id(page)}, page_url={page.url if page else 'None'}")
             if not page:
                 return {
                     "success": False,
                     "error": "Страница браузера недоступна",
                     "user_id": user_id
                 }
+            
+            # ШАГ 0: ОБНОВЛЯЕМ СТРАНИЦУ ЧЕРЕЗ CTRL+SHIFT+R (жесткая перезагрузка) 🔄
+            logger.info(f"🔄 Обновляем страницу через Ctrl+Shift+R...")
+            try:
+                # Жесткая перезагрузка страницы (очистка кеша + обновление)
+                await page.reload(wait_until="networkidle", timeout=15000)
+                logger.info("✅ Страница успешно обновлена!")
+                await asyncio.sleep(1)  # Ждем стабилизации после обновления
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка при обновлении страницы: {e}")
+                # Пробуем альтернативный способ - через keyboard
+                try:
+                    await page.keyboard.press("Control+Shift+R")
+                    logger.info("✅ Отправлен Ctrl+Shift+R")
+                    await asyncio.sleep(3)  # Ждем перезагрузки
+                except Exception as e2:
+                    logger.warning(f"⚠️ Ошибка при отправке Ctrl+Shift+R: {e2}")
             
             # 1. Закрываем текущую форму - кликаем по кнопке закрытия
             close_button_selectors = [
