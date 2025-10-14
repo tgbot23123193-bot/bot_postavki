@@ -24,7 +24,10 @@ class WBBrowserAutomationPro:
     """Профессиональная автоматизация браузера для WB с обходом детекции."""
     
     def __init__(self, headless: bool = True, debug_mode: bool = False, user_id: int = None, browser_type: str = "firefox"):
-        self.headless = headless
+        # В production ВСЕГДА headless (нет графического окружения в Railway)
+        import os
+        environment = os.getenv("ENVIRONMENT", "development").lower()
+        self.headless = True if environment == "production" else headless
         self.debug_mode = debug_mode
         self.user_id = user_id
         self.browser_type = browser_type  # "chromium", "firefox", "webkit"
