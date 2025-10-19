@@ -1,0 +1,124 @@
+/* Content styles for WB Extension */
+
+/* Highlight elements on hover for debugging */
+.wb-extension-highlight {
+    outline: 2px solid #667eea !important;
+    outline-offset: 2px;
+}
+
+/* Custom scrollbar for extension elements */
+.wb-extension-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+.wb-extension-scrollbar::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 3px;
+}
+
+.wb-extension-scrollbar::-webkit-scrollbar-thumb {
+    background: #667eea;
+    border-radius: 3px;
+}
+
+.wb-extension-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #5568d3;
+}
+
+/* Overlay for modal dialogs */
+.wb-extension-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 999997;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Modal dialog */
+.wb-extension-modal {
+    background: white;
+    border-radius: 16px;
+    padding: 24px;
+    max-width: 500px;
+    width: 90%;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    animation: modalFadeIn 0.3s ease;
+}
+
+@keyframes modalFadeIn {
+    from {
+        opacity: 0;
+        transform: scale(0.9) translateY(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
+/* Loading spinner */
+.wb-extension-spinner {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 3px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top-color: white;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Toast notifications */
+.wb-extension-toast {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    padding: 16px 24px;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    z-index: 999999;
+    animation: toastSlideIn 0.3s ease;
+    max-width: 300px;
+}
+
+@keyframes toastSlideIn {
+    from {
+        transform: translateX(400px);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+.wb-extension-toast.success {
+    border-left: 4px solid #10b981;
+}
+
+.wb-extension-toast.error {
+    border-left: 4px solid #ef4444;
+}
+
+.wb-extension-toast.warning {
+    border-left: 4px solid #f59e0b;
+}
+
+.wb-extension-toast.info {
+    border-left: 4px solid #3b82f6;
+}
+
+
+

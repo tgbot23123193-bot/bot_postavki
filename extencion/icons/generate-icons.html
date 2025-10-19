@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Generate Icons</title>
+</head>
+<body>
+    <h2>Icon Generator</h2>
+    <p>Open browser console and run the generation script</p>
+    
+    <canvas id="canvas16" width="16" height="16"></canvas>
+    <canvas id="canvas48" width="48" height="48"></canvas>
+    <canvas id="canvas128" width="128" height="128"></canvas>
+
+    <script>
+        const svgSource = `<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <circle cx="64" cy="64" r="60" fill="url(#gradient)"/>
+  <g transform="translate(30, 35)">
+    <rect x="10" y="15" width="48" height="40" fill="white" opacity="0.9"/>
+    <path d="M10 15 L34 5 L58 15 L34 25 Z" fill="white" opacity="1"/>
+    <path d="M58 15 L58 55 L34 65 L34 25 Z" fill="white" opacity="0.7"/>
+    <rect x="10" y="32" width="48" height="6" fill="url(#gradient)" opacity="0.8"/>
+    <path d="M34 5 L34 25 L30 25 L30 5 Z" fill="url(#gradient)" opacity="0.8"/>
+    <path d="M34 5 L34 25 L38 25 L38 5 Z" fill="url(#gradient)" opacity="0.9"/>
+    <path d="M34 25 L34 65 L38 63 L38 23 Z" fill="url(#gradient)" opacity="0.7"/>
+  </g>
+  <circle cx="95" cy="95" r="18" fill="#10b981"/>
+  <path d="M88 95 L93 100 L102 88" stroke="white" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`;
+
+        function generateIcon(size) {
+            const canvas = document.getElementById(`canvas${size}`);
+            const ctx = canvas.getContext('2d');
+            
+            const img = new Image();
+            const blob = new Blob([svgSource], { type: 'image/svg+xml' });
+            const url = URL.createObjectURL(blob);
+            
+            img.onload = function() {
+                ctx.drawImage(img, 0, 0, size, size);
+                URL.revokeObjectURL(url);
+                
+                canvas.toBlob(function(blob) {
+                    const link = document.createElement('a');
+                    link.download = `icon${size}.png`;
+                    link.href = URL.createObjectURL(blob);
+                    link.click();
+                });
+            };
+            
+            img.src = url;
+        }
+
+        // Auto-generate on load
+        setTimeout(() => {
+            console.log('Generating icons...');
+            generateIcon(16);
+            setTimeout(() => generateIcon(48), 500);
+            setTimeout(() => generateIcon(128), 1000);
+        }, 1000);
+    </script>
+</body>
+</html>
+
+
+
+
+
+
+

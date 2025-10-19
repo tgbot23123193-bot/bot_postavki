@@ -182,6 +182,27 @@ class BotApplication:
             else:
                 logger.info("No existing webhook found")
             
+            # Setup API routes for extension (в polling mode тоже нужен web server для API)
+            from .api.extension_api import setup_routes, set_bot_instance
+            set_bot_instance(self.bot)
+            
+            # Create web application for API
+            app = web.Application()
+            setup_routes(app)
+            
+            # Add health check endpoint
+            async def health_check(request):
+                return web.json_response({"status": "healthy", "service": "wb-bot"})
+            
+            app.router.add_get("/health", health_check)
+            
+            # Start web server in background
+            runner = web.AppRunner(app)
+            await runner.setup()
+            site = web.TCPSite(runner, "0.0.0.0", 8080)
+            await site.start()
+            logger.info("API server started on port 8080")
+            
             # Start monitoring service in background
             logger.info("Starting monitoring service...")
             self.monitoring_task = asyncio.create_task(start_monitoring_service())
@@ -233,6 +254,11 @@ class BotApplication:
                 secret_token=self.settings.telegram.webhook_secret
             )
             webhook_handler.register(app, path=self.settings.telegram.webhook_path)
+            
+            # Setup API routes for extension
+            from .api.extension_api import setup_routes, set_bot_instance
+            set_bot_instance(self.bot)
+            setup_routes(app)
             
             # Add health check endpoint
             async def health_check(request):

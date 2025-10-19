@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WB Поставки Менеджер</title>
+    <link rel="stylesheet" href="popup-styles.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>🚚 WB Поставки</h1>
+            <div class="status-indicator" id="statusIndicator">
+                <span class="status-dot"></span>
+                <span class="status-text">Не подключено</span>
+            </div>
+        </header>
+
+        <nav class="tabs">
+            <button class="tab active" data-tab="auth">Привязка</button>
+            <button class="tab" data-tab="autocatch">Автоловля</button>
+            <button class="tab" data-tab="redistribute">Перераспред</button>
+        </nav>
+
+        <main class="content">
+            <!-- Вкладка Привязки к боту -->
+            <div id="auth" class="tab-content active">
+                <div class="auth-section">
+                    <h3>🔗 Привязка к Telegram боту</h3>
+                    
+                    <div id="authNotLinked" style="display: block;">
+                        <div class="alert-info">
+                            <p>📱 Для работы расширения необходимо привязать его к вашему Telegram боту</p>
+                        </div>
+
+                        <div class="info-box">
+                            <h4>Как привязать расширение:</h4>
+                            <ol>
+                                <li>Откройте Telegram бота</li>
+                                <li>Отправьте команду <code>/extension</code></li>
+                                <li>Скопируйте полученный ключ привязки</li>
+                                <li>Вставьте ключ в поле ниже</li>
+                            </ol>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Ключ привязки:</label>
+                            <input type="text" id="linkKey" placeholder="Введите ключ из бота" class="input">
+                        </div>
+
+                        <button class="btn btn-primary" id="linkExtensionBtn">
+                            <span>🔗</span> Привязать расширение
+                        </button>
+                    </div>
+
+                    <div id="authLinked" style="display: none;">
+                        <div class="alert-info" style="background: #10b981;">
+                            <p style="color: white;">✅ Расширение успешно привязано к боту!</p>
+                        </div>
+
+                        <div class="stats-card">
+                            <h4>📊 Информация о привязке:</h4>
+                            <div class="stat-row">
+                                <span>Telegram ID:</span>
+                                <strong id="linkedUserId">-</strong>
+                            </div>
+                            <div class="stat-row">
+                                <span>Дата привязки:</span>
+                                <span id="linkedDate">-</span>
+                            </div>
+                        </div>
+
+                        <button class="btn btn-danger" id="unlinkExtensionBtn">
+                            <span>🔓</span> Отвязать расширение
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Вкладка Автоловья -->
+            <div id="autocatch" class="tab-content">
+                <div class="autocatch-section">
+                    <div id="autoCatchLocked" class="warning-box" style="display: none;">
+                        <p>⚠️ <strong>Расширение не привязано к боту</strong></p>
+                        <p>Для использования автоловли необходимо привязать расширение к Telegram боту.</p>
+                        <button class="btn btn-primary" onclick="document.querySelector('[data-tab=auth]').click()">
+                            <span>🔗</span> Перейти к привязке
+                        </button>
+                    </div>
+
+                    <div id="autoCatchUnlocked">
+                        <div class="section-header">
+                            <h3>🎯 Автоловля поставок</h3>
+                            <label class="switch">
+                                <input type="checkbox" id="autoCatchToggle">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+
+                        <div class="alert-info">
+                            <p>⚡ Автоматически нажимает на кнопку "Запланировать поставку" с заданным интервалом</p>
+                        </div>
+
+                    <div class="form-group">
+                        <label>Интервал между кликами (миллисекунды):</label>
+                        <input type="number" id="autoCatchInterval" min="100" max="10000" value="1000" step="100" class="input">
+                        <small class="hint">Рекомендуется: 500-2000 мс (чем меньше, тем быстрее)</small>
+                    </div>
+
+                    <div class="filters-section">
+                        <h4>📦 Тип упаковки:</h4>
+                        
+                        <div class="form-group">
+                            <select id="boxType" class="input">
+                                <option value="box">Короба</option>
+                                <option value="monopallet">Монопаллеты</option>
+                            </select>
+                        </div>
+
+                        <div id="monopalletBlock" style="display: none;">
+                            <div class="form-group">
+                                <label>Количество монопаллет:</label>
+                                <input type="number" id="monopalletCount" min="1" max="100" value="1" class="input">
+                                <small class="hint">От 1 до 100 паллет</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="filters-section">
+                        <h4>🗓️ Фильтр по дате поставки:</h4>
+                        
+                        <div class="form-group">
+                            <label>Режим выбора даты:</label>
+                            <select id="dateFilterMode" class="input">
+                                <option value="any">Любая дата</option>
+                                <option value="specific">Конкретная дата</option>
+                                <option value="range">Диапазон дат</option>
+                            </select>
+                        </div>
+
+                        <div id="specificDateBlock" style="display: none;">
+                            <div class="form-group">
+                                <label>Выберите дату:</label>
+                                <input type="date" id="specificDate" class="input">
+                            </div>
+                        </div>
+
+                        <div id="dateRangeBlock" style="display: none;">
+                            <div class="form-group">
+                                <label>Дата от:</label>
+                                <input type="date" id="dateFrom" class="input">
+                            </div>
+                            <div class="form-group">
+                                <label>Дата до:</label>
+                                <input type="date" id="dateTo" class="input">
+                            </div>
+                        </div>
+
+                        <h4>💰 Фильтр по приемке (коэффициент):</h4>
+                        
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="filterByCoefficient">
+                                Фильтровать по коэффициенту
+                            </label>
+                        </div>
+
+                        <div id="coefficientBlock" style="display: none;">
+                            <div class="form-group">
+                                <label>Приемка от:</label>
+                                <select id="coefficientFrom" class="input">
+                                    <option value="0">Бесплатно (0x)</option>
+                                    <option value="1">1x</option>
+                                    <option value="2">2x</option>
+                                    <option value="3">3x</option>
+                                    <option value="5">5x</option>
+                                    <option value="10">10x</option>
+                                    <option value="15">15x</option>
+                                    <option value="20">20x</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group">
+                                <label>Приемка до:</label>
+                                <select id="coefficientTo" class="input">
+                                    <option value="0">Бесплатно (0x)</option>
+                                    <option value="1">1x</option>
+                                    <option value="2">2x</option>
+                                    <option value="3">3x</option>
+                                    <option value="5">5x</option>
+                                    <option value="10">10x</option>
+                                    <option value="15">15x</option>
+                                    <option value="20" selected>20x+</option>
+                                </select>
+                            </div>
+
+                            <div class="checkbox-label">
+                                <input type="checkbox" id="allowFree" checked>
+                                Включая "Бесплатно"
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stats-card">
+                        <h4>📊 Статистика сессии:</h4>
+                        <div class="stat-row">
+                            <span>Статус:</span>
+                            <span id="autoCatchStatus" class="status-badge stopped">Остановлена</span>
+                        </div>
+                        <div class="stat-row">
+                            <span>Кликов выполнено:</span>
+                            <strong id="clickCount">0</strong>
+                        </div>
+                        <div class="stat-row">
+                            <span>Последний клик:</span>
+                            <span id="lastClickTime">-</span>
+                        </div>
+                        <div class="stat-row">
+                            <span>Всего за всё время:</span>
+                            <strong id="totalClicks">0</strong>
+                        </div>
+                    </div>
+
+                    <div class="button-group">
+                        <button class="btn btn-primary" id="startAutoCatchBtn">
+                            <span>🚀</span> Запустить
+                        </button>
+                        <button class="btn btn-danger" id="stopAutoCatchBtn" disabled>
+                            <span>🛑</span> Остановить
+                        </button>
+                    </div>
+
+                    <div class="button-group">
+                        <button class="btn btn-secondary" id="testClickBtn">
+                            <span>🧪</span> Тестовый клик
+                        </button>
+                        <button class="btn btn-secondary" id="resetStatsBtn">
+                            <span>🔄</span> Сбросить статистику
+                        </button>
+                    </div>
+
+                    <div class="button-group">
+                        <button class="btn btn-secondary" id="debugCalendarBtn">
+                            <span>🔍</span> Отладка календаря
+                        </button>
+                        <button class="btn btn-secondary" id="openConsoleBtn">
+                            <span>📝</span> Открыть консоль
+                        </button>
+                    </div>
+
+                    <div class="info-box">
+                        <h4>💡 Как использовать:</h4>
+                        <ol>
+                            <li>Откройте страницу с поставками на seller.wildberries.ru</li>
+                            <li>Убедитесь, что кнопка "Запланировать поставку" видна на странице</li>
+                            <li>Установите желаемый интервал (чем меньше, тем быстрее кликает)</li>
+                            <li>Нажмите "Запустить" и минимизируйте расширение</li>
+                            <li>Бот будет автоматически кликать на кнопку</li>
+                            <li>Когда поставка откроется, вы получите уведомление</li>
+                        </ol>
+                    </div>
+
+                    <div class="warning-box">
+                        <p>⚠️ <strong>Важно:</strong> Не закрывайте вкладку с WB во время работы автоловли!</p>
+                        <p>⚠️ Рекомендуем интервал не менее 500 мс, чтобы избежать блокировки</p>
+                    </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Вкладка Перераспределение -->
+            <div id="redistribute" class="tab-content">
+                <div class="redistribute-section">
+                    <div id="redistributeLocked" class="warning-box" style="display: none;">
+                        <p>⚠️ <strong>Расширение не привязано к боту</strong></p>
+                        <p>Для использования перераспределения необходимо привязать расширение к Telegram боту.</p>
+                        <button class="btn btn-primary" onclick="document.querySelector('[data-tab=auth]').click()">
+                            <span>🔗</span> Перейти к привязке
+                        </button>
+                    </div>
+
+                    <div id="redistributeUnlocked">
+                        <div class="section-header">
+                            <h3>🔄 Перераспределение остатков</h3>
+                            <label class="switch">
+                                <input type="checkbox" id="redistributeToggle">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+
+                        <div class="alert-info">
+                            <p>⚡ Автоматически перераспределяет остатки товаров между складами</p>
+                        </div>
+
+                    <div class="filters-section">
+                        <h4>📋 Настройки перераспределения:</h4>
+                        
+                        <div class="form-group">
+                            <label>Артикул товара WB:</label>
+                            <input type="text" id="redistributeArticle" placeholder="Введите артикул (например: 446796490)" class="input">
+                            <small class="hint">Артикул товара на Wildberries (nmID)</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label>📦 Количество товара:</label>
+                            <input type="number" id="redistributeQuantity" min="1" max="10000" value="1" class="input">
+                            <small class="hint">Сколько единиц товара переместить</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label>📤 Склад ОТКУДА забрать:</label>
+                            <select id="warehouseFrom" class="input">
+                                <option value="">-- Выберите склад --</option>
+                                <option value="Коледино">Коледино</option>
+                                <option value="Казань">Казань</option>
+                                <option value="Электросталь">Электросталь</option>
+                                <option value="Санкт-Петербург Уткина Завод">Санкт-Петербург Уткина Завод</option>
+                                <option value="Екатеринбург – Испытателей 14г">Екатеринбург – Испытателей 14г</option>
+                                <option value="Тула">Тула</option>
+                                <option value="Невинномысск">Невинномысск</option>
+                                <option value="Рязань (Тюшевское)">Рязань (Тюшевское)</option>
+                                <option value="Котовск">Котовск</option>
+                                <option value="Волгоград">Волгоград</option>
+                                <option value="Сарапул">Сарапул</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label>📥 Склад КУДА переместить:</label>
+                            <select id="warehouseTo" class="input">
+                                <option value="">-- Выберите склад --</option>
+                                <option value="Коледино">Коледино</option>
+                                <option value="Казань">Казань</option>
+                                <option value="Электросталь">Электросталь</option>
+                                <option value="Санкт-Петербург Уткина Завод">Санкт-Петербург Уткина Завод</option>
+                                <option value="Екатеринбург – Испытателей 14г">Екатеринбург – Испытателей 14г</option>
+                                <option value="Тула">Тула</option>
+                                <option value="Невинномысск">Невинномысск</option>
+                                <option value="Рязань (Тюшевское)">Рязань (Тюшевское)</option>
+                                <option value="Котовск">Котовск</option>
+                                <option value="Волгоград">Волгоград</option>
+                                <option value="Сарапул">Сарапул</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="stats-card">
+                        <h4>📊 Статистика:</h4>
+                        <div class="stat-row">
+                            <span>Статус:</span>
+                            <span id="redistributeStatus" class="status-badge stopped">Остановлено</span>
+                        </div>
+                        <div class="stat-row">
+                            <span>Выполнено:</span>
+                            <strong id="redistributeCount">0</strong>
+                        </div>
+                        <div class="stat-row">
+                            <span>Последнее:</span>
+                            <span id="lastRedistributeTime">-</span>
+                        </div>
+                    </div>
+
+                    <div class="info-box">
+                        <h4>💡 Как использовать:</h4>
+                        <ol>
+                            <li>Введите артикул товара WB (nmID)</li>
+                            <li>Убедитесь, что вы авторизованы на seller.wildberries.ru</li>
+                            <li>Нажмите "Открыть страницу" или перейдите вручную</li>
+                            <li>Нажмите "Запустить" для автоматического перераспределения</li>
+                            <li>Бот будет автоматически вводить артикул и обрабатывать окна</li>
+                        </ol>
+                    </div>
+
+                    <div class="warning-box">
+                        <p>⚠️ <strong>Важно:</strong> Не закрывайте вкладку WB во время работы!</p>
+                        <p>⚠️ Процесс может занять время в зависимости от количества товаров</p>
+                    </div>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+
+        <footer class="footer">
+            <p>Последнее обновление: <span id="lastUpdate">-</span></p>
+        </footer>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>

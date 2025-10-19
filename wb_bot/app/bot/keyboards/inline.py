@@ -70,8 +70,8 @@ def get_main_menu() -> InlineKeyboardMarkup:
                 callback_data="view_supplies"
             ),
             InlineKeyboardButton(
-                text="🔄 Перераспределение остатков",
-                callback_data="redistribution_menu"
+                text="🔌 Расширение Chrome",
+                callback_data="extension_info"
             )
         ],
         [
