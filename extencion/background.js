@@ -7,8 +7,8 @@ class BackgroundService {
         this.alarmName = 'deliveryMonitoring';
         
         // URL бота для API запросов
-        this.BOT_API_URL = 'http://localhost:8080/api'; // Локальная разработка
-        // this.BOT_API_URL = 'https://bot-postavki-production.up.railway.app/api'; // Production
+        // this.BOT_API_URL = 'http://localhost:8080/api'; // Локальная разработка
+        this.BOT_API_URL = 'https://bot-postavki-production.up.railway.app/api'; // Production
         
         this.init();
     }

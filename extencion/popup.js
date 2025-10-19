@@ -227,8 +227,8 @@ class PopupManager {
 
         try {
             // Определяем URL API (локальный или production)
-            const API_URL = 'http://localhost:8080'; // Для локальной разработки
-            // const API_URL = 'https://bot-postavki-production.up.railway.app'; // Для production
+            // const API_URL = 'http://localhost:8080'; // Для локальной разработки
+            const API_URL = 'https://bot-postavki-production.up.railway.app'; // Для production
             
             // Отправляем запрос на сервер бота для привязки
             const response = await fetch(`${API_URL}/api/extension/link`, {
