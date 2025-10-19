@@ -209,12 +209,27 @@ async def cors_middleware(app, handler):
     return middleware_handler
 
 
+async def test_api(request: web.Request) -> web.Response:
+    """Test API endpoint."""
+    return web.json_response({
+        'success': True,
+        'message': 'Extension API is working!',
+        'timestamp': datetime.utcnow().isoformat()
+    })
+
+
 def setup_routes(app: web.Application):
     """Setup API routes for extension."""
     # Add CORS middleware
     app.middlewares.append(cors_middleware)
     
+    # Add routes
+    app.router.add_get('/api/extension/test', test_api)
     app.router.add_post('/api/extension/link', link_extension)
     app.router.add_post('/api/extension/notify', send_notification)
+    
     logger.info("Extension API routes configured")
+    logger.info("Test endpoint: /api/extension/test")
+    logger.info("Link endpoint: /api/extension/link")
+    logger.info("Notify endpoint: /api/extension/notify")
 
