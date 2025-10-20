@@ -1135,15 +1135,7 @@ class WBContentScript {
                     
                     this.showPageNotification(`🎉 Успех! ${selectedDate.dateText}`, 'success');
                     
-                    // ОСТАНАВЛИВАЕМ автоловлю после успешного планирования
-                    this.autoCatchEnabled = false;
-                    if (this.autoCatchInterval) {
-                        clearInterval(this.autoCatchInterval);
-                        this.autoCatchInterval = null;
-                    }
-                    
-                    await chrome.storage.local.set({ autoCatchEnabled: false });
-                    
+                    // НЕ ОСТАНАВЛИВАЕМ автоловлю - продолжаем работать!
                     // Отправляем уведомление в Telegram через бот
                     chrome.runtime.sendMessage({
                         action: 'sendNotification',
@@ -1157,7 +1149,11 @@ class WBContentScript {
                         }
                     });
                     
-                    return true;
+                    // Закрываем модалку и продолжаем кликать
+                    await this.closeModal();
+                    await this.sleep(500);
+                    
+                    return false; // Продолжаем автоловлю
                 } else {
                     console.log('');
                     console.log('⚠️ НЕ УДАЛОСЬ НАЖАТЬ ФИНАЛЬНУЮ "ЗАПЛАНИРОВАТЬ"');
@@ -2059,7 +2055,7 @@ class WBContentScript {
             console.log('✅ ВВЕДЕНО:', inputField.value);
             console.log('═══════════════════════════════════════════');
             
-            await this.sleep(1500); // Увеличена задержка до 1.5 секунды
+            await this.sleep(2000); // Увеличена задержка до 2 секунд
             
             // Ждем появления выпадающего списка и кликаем на опцию
             const optionClicked = await this.clickArticleOption();
@@ -2275,6 +2271,7 @@ class WBContentScript {
                     console.log('🔄 Запускаем следующий цикл перераспределения...');
                     await this.clickRedistributeButton();
                 }
+                return; // Не прерываем выполнение
             } else {
                 console.log('⚠️ Не удалось нажать кнопку "Перераспределить"');
                 await this.closeModalWithEsc();
@@ -2283,9 +2280,8 @@ class WBContentScript {
                     await this.sleep(1000);
                     await this.clickRedistributeButton();
                 }
+                return; // Не прерываем выполнение
             }
-            
-            return true;
         } catch (error) {
             console.error('Ошибка при выборе складов:', error);
             return false;
