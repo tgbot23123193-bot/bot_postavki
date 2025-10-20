@@ -135,8 +135,7 @@ async def browser_start_mode_fixed(callback: CallbackQuery, state: FSMContext):
                     "🎉 Браузер готов к работе!\n\n"
                     "Выберите действие:",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="🔍 Найти слоты", callback_data="browser_find_slots")],
-                        [InlineKeyboardButton(text="📦 Мои поставки", callback_data="browser_my_supplies")],
+                        [InlineKeyboardButton(text="📦 Мои поставки", callback_data="view_supplies")],
                         [InlineKeyboardButton(text="🤖 Автомониторинг", callback_data="browser_auto_monitor")],
                         [InlineKeyboardButton(text="❌ Закрыть браузер", callback_data="browser_close")]
                     ])
@@ -280,8 +279,7 @@ async def process_sms_code(message: Message, state: FSMContext):
                 "🎉 Браузер готов к работе!\n\n"
                 "Выберите действие:",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="🔍 Найти слоты", callback_data="browser_find_slots")],
-                    [InlineKeyboardButton(text="📦 Мои поставки", callback_data="browser_my_supplies")],
+                    [InlineKeyboardButton(text="📦 Мои поставки", callback_data="view_supplies")],
                     [InlineKeyboardButton(text="🤖 Автомониторинг", callback_data="browser_auto_monitor")],
                     [InlineKeyboardButton(text="❌ Закрыть браузер", callback_data="browser_close")]
                 ])
@@ -301,60 +299,7 @@ async def process_sms_code(message: Message, state: FSMContext):
         )
 
 
-@router.callback_query(F.data == "browser_find_slots")
-async def browser_find_slots(callback: CallbackQuery):
-    """Поиск доступных слотов через браузер."""
-    user_id = callback.from_user.id
-    browser = await browser_manager.get_browser(user_id)
-    
-    if not browser:
-        await callback.answer("❌ Сессия браузера не найдена", show_alert=True)
-        return
-    
-    loading_msg = await callback.message.edit_text(
-        "🔍 Ищу доступные слоты...\n"
-        "⏳ Это может занять несколько секунд...",
-        parse_mode="HTML"
-    )
-    
-    try:
-        slots = await browser.find_available_slots()
-        
-        if slots:
-            text = f"✅ <b>Найдено слотов: {len(slots)}</b>\n\n"
-            
-            for i, slot in enumerate(slots[:10], 1):
-                text += f"{i}. 📅 {slot['date']} - Коэф: x{slot['coefficient']}\n"
-            
-            if len(slots) > 10:
-                text += f"\n... и еще {len(slots) - 10} слотов"
-            
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📅 Забронировать", callback_data="browser_book_slot")],
-                [InlineKeyboardButton(text="🔄 Обновить", callback_data="browser_find_slots")],
-                [InlineKeyboardButton(text="⬅️ Назад", callback_data="browser_menu")]
-            ])
-            
-            await loading_msg.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
-        else:
-            await loading_msg.edit_text(
-                "😔 Доступных слотов не найдено.\n"
-                "Попробуйте позже или настройте автомониторинг.",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="🔄 Повторить", callback_data="browser_find_slots")],
-                    [InlineKeyboardButton(text="🤖 Автомониторинг", callback_data="browser_auto_monitor")],
-                    [InlineKeyboardButton(text="⬅️ Назад", callback_data="browser_menu")]
-                ])
-            )
-            
-    except Exception as e:
-        logger.error(f"Error finding slots: {e}")
-        await loading_msg.edit_text(
-            "❌ Ошибка при поиске слотов.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="⬅️ Назад", callback_data="browser_menu")]
-            ])
-        )
+# УДАЛЕНО: browser_find_slots - функция больше не используется
 
 
 @router.callback_query(F.data == "browser_auto_monitor")
@@ -1005,8 +950,7 @@ async def browser_menu(callback: CallbackQuery, state: FSMContext):
         "Выберите действие:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔍 Найти слоты", callback_data="browser_find_slots")],
-            [InlineKeyboardButton(text="📦 Мои поставки", callback_data="browser_my_supplies")],
+            [InlineKeyboardButton(text="📦 Мои поставки", callback_data="view_supplies")],
             [InlineKeyboardButton(text="🤖 Автомониторинг", callback_data="browser_auto_monitor")],
             [InlineKeyboardButton(text="❌ Закрыть браузер", callback_data="browser_close")]
         ])
@@ -1032,64 +976,4 @@ async def browser_close(callback: CallbackQuery):
     )
 
 
-@router.callback_query(F.data == "browser_my_supplies")
-async def browser_my_supplies(callback: CallbackQuery):
-    """Показать мои поставки через браузер."""
-    user_id = callback.from_user.id
-    browser = await browser_manager.get_browser(user_id)
-    
-    if not browser:
-        await callback.answer("❌ Сессия браузера не найдена", show_alert=True)
-        return
-    
-    loading_msg = await callback.message.edit_text(
-        "📦 Загружаю ваши поставки...\n"
-        "⏳ Это может занять несколько секунд...",
-        parse_mode="HTML"
-    )
-    
-    try:
-        # Переходим на страницу поставок
-        await browser.navigate_to_supplies_page()
-        await asyncio.sleep(2)
-        
-        # Получаем список поставок
-        supplies = await browser.get_my_supplies()
-        
-        if supplies:
-            text = f"📦 <b>Ваши поставки ({len(supplies)} шт):</b>\n\n"
-            
-            for i, supply in enumerate(supplies[:10], 1):
-                status = supply.get('status', 'Неизвестно')
-                date = supply.get('date', 'Не указана')
-                text += f"{i}. 🆔 #{supply.get('id', 'N/A')} - {status}\n"
-                text += f"   📅 Дата: {date}\n\n"
-            
-            if len(supplies) > 10:
-                text += f"... и еще {len(supplies) - 10} поставок"
-            
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔄 Обновить", callback_data="browser_my_supplies")],
-                [InlineKeyboardButton(text="⬅️ Назад", callback_data="browser_menu")]
-            ])
-            
-            await loading_msg.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
-        else:
-            await loading_msg.edit_text(
-                "😔 Поставки не найдены.\n"
-                "Создайте поставку в личном кабинете WB.",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="🔄 Обновить", callback_data="browser_my_supplies")],
-                    [InlineKeyboardButton(text="⬅️ Назад", callback_data="browser_menu")]
-                ])
-            )
-            
-    except Exception as e:
-        logger.error(f"Error getting supplies: {e}")
-        await loading_msg.edit_text(
-            "❌ Ошибка при загрузке поставок.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔄 Повторить", callback_data="browser_my_supplies")],
-                [InlineKeyboardButton(text="⬅️ Назад", callback_data="browser_menu")]
-            ])
-        )
+# УДАЛЕНО: browser_my_supplies - теперь используется view_supplies из supplies_management
