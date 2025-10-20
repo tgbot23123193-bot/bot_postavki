@@ -2059,7 +2059,7 @@ class WBContentScript {
             console.log('✅ ВВЕДЕНО:', inputField.value);
             console.log('═══════════════════════════════════════════');
             
-            await this.sleep(500);
+            await this.sleep(1500); // Увеличена задержка до 1.5 секунды
             
             // Ждем появления выпадающего списка и кликаем на опцию
             const optionClicked = await this.clickArticleOption();
