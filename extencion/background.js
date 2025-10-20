@@ -8,7 +8,7 @@ class BackgroundService {
         
         // URL бота для API запросов
         // this.BOT_API_URL = 'http://localhost:8080/api'; // Локальная разработка
-        this.BOT_API_URL = 'https://bot-postavki-production.up.railway.app/api'; // Production
+        this.BOT_API_URL = 'https://botpostavki-production.up.railway.app/api'; // Production
         
         this.init();
     }
@@ -74,6 +74,21 @@ class BackgroundService {
                 case 'supplyPlanned':
                     await this.handleSupplyPlanned(request);
                     sendResponse({ success: true });
+                    break;
+
+                case 'startBackgroundAutoCatch':
+                    await this.startBackgroundAutoCatch(request.tabId, request.interval, request.filters);
+                    sendResponse({ success: true });
+                    break;
+
+                case 'stopBackgroundAutoCatch':
+                    await this.stopBackgroundAutoCatch(request.tabId);
+                    sendResponse({ success: true });
+                    break;
+
+                case 'getBackgroundStatus':
+                    const status = await this.getBackgroundStatus();
+                    sendResponse(status);
                     break;
 
                 default:
@@ -564,9 +579,116 @@ class BackgroundService {
 
         await chrome.storage.local.set({ monitoringLog: logs });
     }
+
+    // ========== BACKGROUND AUTO-CATCH (24/7) ==========
+
+    async startBackgroundAutoCatch(tabId, interval, filters) {
+        console.log(`🚀 Starting background auto-catch for tab ${tabId}`);
+        
+        // Сохраняем конфигурацию в storage
+        const data = await chrome.storage.local.get(['backgroundTasks']);
+        const tasks = data.backgroundTasks || {};
+        
+        tasks[tabId] = {
+            type: 'autoCatch',
+            interval: interval,
+            filters: filters,
+            startedAt: Date.now(),
+            clickCount: 0,
+            isActive: true
+        };
+        
+        await chrome.storage.local.set({ backgroundTasks: tasks });
+        
+        // Запускаем периодическую проверку для этой вкладки
+        this.scheduleTabCheck(tabId, interval);
+        
+        console.log(`✅ Background auto-catch started for tab ${tabId}`);
+    }
+
+    async stopBackgroundAutoCatch(tabId) {
+        console.log(`🛑 Stopping background auto-catch for tab ${tabId}`);
+        
+        const data = await chrome.storage.local.get(['backgroundTasks']);
+        const tasks = data.backgroundTasks || {};
+        
+        if (tasks[tabId]) {
+            tasks[tabId].isActive = false;
+            await chrome.storage.local.set({ backgroundTasks: tasks });
+        }
+        
+        console.log(`✅ Background auto-catch stopped for tab ${tabId}`);
+    }
+
+    async scheduleTabCheck(tabId, interval) {
+        // Создаем alarm для периодической проверки
+        const alarmName = `autoCatch_${tabId}`;
+        
+        await chrome.alarms.create(alarmName, {
+            delayInMinutes: 0,
+            periodInMinutes: interval / 60000 // конвертируем миллисекунды в минуты
+        });
+        
+        console.log(`⏰ Scheduled alarm ${alarmName} with interval ${interval}ms`);
+    }
+
+    async getBackgroundStatus() {
+        const data = await chrome.storage.local.get(['backgroundTasks']);
+        const tasks = data.backgroundTasks || {};
+        
+        return {
+            activeTasks: Object.keys(tasks).filter(tabId => tasks[tabId].isActive).length,
+            tasks: tasks
+        };
+    }
+
+    async performBackgroundClick(tabId) {
+        console.log(`🎯 Performing background click for tab ${tabId}`);
+        
+        try {
+            // Проверяем что вкладка еще существует
+            const tab = await chrome.tabs.get(tabId);
+            
+            if (!tab) {
+                console.log(`Tab ${tabId} no longer exists, stopping task`);
+                await this.stopBackgroundAutoCatch(tabId);
+                return;
+            }
+            
+            // Отправляем команду на клик
+            const response = await chrome.tabs.sendMessage(tabId, {
+                action: 'clickButton'
+            });
+            
+            if (response.success) {
+                // Обновляем статистику
+                const data = await chrome.storage.local.get(['backgroundTasks']);
+                const tasks = data.backgroundTasks || {};
+                
+                if (tasks[tabId]) {
+                    tasks[tabId].clickCount++;
+                    tasks[tabId].lastClick = Date.now();
+                    await chrome.storage.local.set({ backgroundTasks: tasks });
+                }
+                
+                console.log(`✅ Background click successful for tab ${tabId}`);
+            }
+        } catch (error) {
+            console.error(`Error performing background click for tab ${tabId}:`, error);
+            // Не останавливаем задачу при ошибке, просто пропускаем итерацию
+        }
+    }
 }
 
 // Initialize background service
 const backgroundService = new BackgroundService();
+
+// Handle alarms for background tasks
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+    if (alarm.name.startsWith('autoCatch_')) {
+        const tabId = parseInt(alarm.name.replace('autoCatch_', ''));
+        await backgroundService.performBackgroundClick(tabId);
+    }
+});
 
 

@@ -228,7 +228,7 @@ class PopupManager {
         try {
             // Определяем URL API (локальный или production)
             // const API_URL = 'http://localhost:8080'; // Для локальной разработки
-            const API_URL = 'https://bot-postavki-production.up.railway.app'; // Для production
+            const API_URL = 'https://botpostavki-production.up.railway.app'; // Для production
             
             // Отправляем запрос на сервер бота для привязки
             const response = await fetch(`${API_URL}/api/extension/link`, {
@@ -514,7 +514,7 @@ class PopupManager {
             await chrome.storage.local.set({ autoCatchFilters: filters });
             console.log('💾 POPUP: Фильтры сохранены в storage');
 
-            // Send start command to content script
+            // Запускаем автоловлю через content script
             console.log('📤 POPUP: Отправляем фильтры в content script:', filters);
             const response = await chrome.tabs.sendMessage(tab.id, {
                 action: 'startAutoCatch',
@@ -523,12 +523,20 @@ class PopupManager {
             });
 
             if (response.success) {
+                // Также запускаем background мониторинг для работы 24/7
+                await chrome.runtime.sendMessage({
+                    action: 'startBackgroundAutoCatch',
+                    tabId: tab.id,
+                    interval: interval,
+                    filters: filters
+                });
+
                 document.getElementById('autoCatchToggle').checked = true;
                 document.getElementById('startAutoCatchBtn').disabled = true;
                 document.getElementById('stopAutoCatchBtn').disabled = false;
                 document.getElementById('autoCatchInterval').disabled = true;
 
-                this.showNotification('🎯 Автоловля запущена!', 'success');
+                this.showNotification('🎯 Автоловля запущена! Работает 24/7 даже при закрытом popup', 'success');
             }
         } catch (error) {
             console.error('Error starting auto-catch:', error);
@@ -585,6 +593,12 @@ class PopupManager {
             // Send stop command to content script
             await chrome.tabs.sendMessage(tab.id, {
                 action: 'stopAutoCatch'
+            });
+
+            // Останавливаем background задачу
+            await chrome.runtime.sendMessage({
+                action: 'stopBackgroundAutoCatch',
+                tabId: tab.id
             });
 
             document.getElementById('autoCatchToggle').checked = false;

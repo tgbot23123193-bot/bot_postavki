@@ -47,15 +47,15 @@ async def start_create_monitoring(callback: CallbackQuery, state: FSMContext):
         )
         return
     
-    # Check if user can create monitoring (trial or premium)
+    # Check if user exists (removed premium check for now)
     async with get_session() as session:
         query = select(User).where(User.id == user_id)
         result = await session.execute(query)
         user = result.scalar_one_or_none()
         
-        if not user or not user.can_use_auto_booking():
+        if not user:
             await callback.answer(
-                "❌ Пробный период исчерпан. Необходима Premium подписка",
+                "❌ Пользователь не найден. Используйте /start",
                 show_alert=True
             )
             return
