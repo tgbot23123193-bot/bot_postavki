@@ -2269,6 +2269,12 @@ class WBContentScript {
                 // Продолжаем цикл - через 5 секунд повторяем
                 console.log('⏱️ Ждем 5 секунд перед следующей попыткой...');
                 await this.sleep(5000);
+                
+                // Повторяем цикл если перераспределение все еще активно
+                if (this.redistributeEnabled) {
+                    console.log('🔄 Запускаем следующий цикл перераспределения...');
+                    await this.clickRedistributeButton();
+                }
             } else {
                 console.log('⚠️ Не удалось нажать кнопку "Перераспределить"');
                 await this.closeModalWithEsc();
