@@ -4905,7 +4905,11 @@ class WBBrowserAutomationPro:
                         if date_selected:
                             logger.info("🎉 ПОСТАВКА УСПЕШНО ЗАПЛАНИРОВАНА!")
                             logger.info(f"   Всего кликов: {click_count}")
-                            return True
+                            
+                            # НЕ ОСТАНАВЛИВАЕМ - продолжаем ловить!
+                            # Закрываем модальное окно и продолжаем
+                            await self._close_modal()
+                            await asyncio.sleep(0.5)
                         else:
                             # Закрываем модальное окно
                             await self._close_modal()
