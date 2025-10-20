@@ -328,7 +328,7 @@ class PopupManager {
             'lastWarehousesUpdate',
             'extensionLink'
         ]);
-        
+
         // Update auto-catch stats
         if (data.autoCatchStats) {
             this.updateAutoCatchStatsDisplay(data.autoCatchStats);
