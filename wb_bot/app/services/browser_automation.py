@@ -4850,3 +4850,232 @@ class WBBrowserAutomationPro:
         except Exception as e:
             logger.error(f"❌ Ошибка получения поставок: {e}")
             return []
+    
+    async def auto_catch_supply(self, filters: dict = None, interval_ms: int = 1000) -> bool:
+        """
+        Автоматическая ловля поставок (логика из Chrome расширения).
+        
+        Args:
+            filters: Фильтры для дат и коэффициентов
+            interval_ms: Интервал между кликами в миллисекундах
+            
+        Returns:
+            True если поставка запланирована, False если остановлено
+        """
+        try:
+            logger.info("🎯 Запуск автоловли поставок...")
+            logger.info(f"⏱️ Интервал: {interval_ms}ms")
+            logger.info(f"📋 Фильтры: {filters}")
+            
+            # Переходим на страницу поставок
+            await self.page.goto("https://seller.wildberries.ru/supplies-management/all-supplies", wait_until="networkidle")
+            await asyncio.sleep(2)
+            
+            click_count = 0
+            
+            while True:
+                # Ищем кнопку "Запланировать поставку"
+                button = await self._find_plan_button()
+                
+                if button:
+                    # Проверяем доступность
+                    is_disabled = await button.get_attribute('disabled')
+                    if is_disabled:
+                        logger.debug("⚠️ Кнопка недоступна")
+                        await asyncio.sleep(interval_ms / 1000)
+                        continue
+                    
+                    # Кликаем
+                    await button.click()
+                    click_count += 1
+                    logger.info(f"✅ Клик #{click_count} по кнопке")
+                    
+                    # Ждем появления модального окна
+                    await asyncio.sleep(0.5)
+                    
+                    # Проверяем модальное окно
+                    modal_opened = await self._check_modal_opened()
+                    
+                    if modal_opened:
+                        logger.info("📋 Модальное окно открылось!")
+                        
+                        # Выбираем дату
+                        date_selected = await self._select_date_in_modal(filters)
+                        
+                        if date_selected:
+                            logger.info("🎉 ПОСТАВКА УСПЕШНО ЗАПЛАНИРОВАНА!")
+                            logger.info(f"   Всего кликов: {click_count}")
+                            return True
+                        else:
+                            # Закрываем модальное окно
+                            await self._close_modal()
+                            await asyncio.sleep(0.3)
+                    
+                else:
+                    logger.debug("❌ Кнопка не найдена")
+                
+                # Ждем перед следующим кликом
+                await asyncio.sleep(interval_ms / 1000)
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка автоловли: {e}")
+            return False
+    
+    async def _find_plan_button(self):
+        """Найти кнопку 'Запланировать поставку'."""
+        # Поиск по различным селекторам
+        selectors = [
+            'button.button_ymbakhzRx',
+            'button:has-text("Запланировать")',
+            'button:has-text("поставку")',
+            'button[class*="fullWidth"]',
+            'button[class*="button"]'
+        ]
+        
+        for selector in selectors:
+            try:
+                button = await self.page.query_selector(selector)
+                if button:
+                    text = await button.inner_text()
+                    if 'запланировать' in text.lower():
+                        return button
+            except:
+                continue
+        
+        return None
+    
+    async def _check_modal_opened(self) -> bool:
+        """Проверить открылось ли модальное окно."""
+        try:
+            modal = await self.page.query_selector('[role="dialog"], .modal, [class*="modal"], [class*="Modal"]')
+            return modal is not None
+        except:
+            return False
+    
+    async def _select_date_in_modal(self, filters: dict = None) -> bool:
+        """Выбрать дату в модальном окне с учетом фильтров."""
+        try:
+            await asyncio.sleep(1)
+            
+            # Ищем ячейки календаря
+            cells = await self.page.query_selector_all('td')
+            
+            logger.info(f"🔍 Найдено ячеек календаря: {len(cells)}")
+            
+            for cell in cells:
+                try:
+                    text = await cell.inner_text()
+                    
+                    # Проверяем что это дата (число)
+                    if not text or not text.strip().isdigit():
+                        continue
+                    
+                    # Проверяем доступность
+                    classes = await cell.get_attribute('class') or ''
+                    if 'disabled' in classes.lower():
+                        continue
+                    
+                    # Извлекаем коэффициент если есть
+                    coefficient = await self._extract_coefficient(cell)
+                    
+                    # Проверяем фильтры
+                    if filters and filters.get('filterByCoefficient'):
+                        coef_from = filters.get('coefficientFrom', 0)
+                        coef_to = filters.get('coefficientTo', 20)
+                        
+                        if coefficient < coef_from or coefficient > coef_to:
+                            continue
+                        
+                        # Проверка бесплатной доставки
+                        if coefficient == 0 and not filters.get('allowFree', True):
+                            continue
+                    
+                    # Кликаем на дату
+                    logger.info(f"📅 Кликаем на дату: {text}, коэффициент: {coefficient}x")
+                    await cell.click()
+                    await asyncio.sleep(0.5)
+                    
+                    # Ищем кнопку финального подтверждения
+                    confirm_clicked = await self._click_final_confirm()
+                    
+                    if confirm_clicked:
+                        logger.info("✅ Финальное подтверждение нажато!")
+                        return True
+                    else:
+                        # Закрываем и пробуем другую дату
+                        await self._close_modal()
+                        await asyncio.sleep(0.3)
+                        return False
+                        
+                except Exception as e:
+                    continue
+            
+            logger.warning("⚠️ Подходящих дат не найдено")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Ошибка выбора даты: {e}")
+            return False
+    
+    async def _extract_coefficient(self, cell) -> int:
+        """Извлечь коэффициент из ячейки."""
+        try:
+            text = await cell.inner_text()
+            # Ищем паттерн "x0", "x1", "x2" и т.д.
+            import re
+            match = re.search(r'x(\d+)', text.lower())
+            if match:
+                return int(match.group(1))
+            
+            # Проверяем на "Бесплатно"
+            if 'бесплатно' in text.lower() or '0x' in text.lower():
+                return 0
+                
+            return 1  # По умолчанию
+        except:
+            return 1
+    
+    async def _click_final_confirm(self) -> bool:
+        """Нажать финальную кнопку подтверждения."""
+        try:
+            # Ждем кнопку подтверждения
+            await asyncio.sleep(0.5)
+            
+            # Ищем кнопку
+            selectors = [
+                'button:has-text("Запланировать")',
+                'button:has-text("Подтвердить")',
+                'button[class*="primary"]',
+                'button[type="submit"]'
+            ]
+            
+            for selector in selectors:
+                try:
+                    button = await self.page.query_selector(selector)
+                    if button:
+                        await button.click()
+                        logger.info("✅ Кнопка подтверждения нажата")
+                        await asyncio.sleep(1)
+                        return True
+                except:
+                    continue
+            
+            return False
+        except Exception as e:
+            logger.error(f"Ошибка нажатия подтверждения: {e}")
+            return False
+    
+    async def _close_modal(self):
+        """Закрыть модальное окно."""
+        try:
+            # Пробуем ESC
+            await self.page.keyboard.press('Escape')
+            await asyncio.sleep(0.2)
+            
+            # Или ищем кнопку закрытия
+            close_btn = await self.page.query_selector('button[aria-label="Close"], button.close, [class*="close"]')
+            if close_btn:
+                await close_btn.click()
+                await asyncio.sleep(0.2)
+        except:
+            pass

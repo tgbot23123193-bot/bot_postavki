@@ -5,6 +5,7 @@
 import asyncio
 from typing import Optional, Dict, Any
 from .browser_automation import WBBrowserAutomationPro
+from ..config import get_settings
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -18,8 +19,14 @@ class BrowserManager:
         self._active_users: Dict[int, Any] = {}  # user_id -> session_data
         self._lock = asyncio.Lock()
     
-    async def get_browser(self, user_id: int, headless: bool = True, debug_mode: bool = False, browser_type: str = "firefox") -> Optional[WBBrowserAutomationPro]:
+    async def get_browser(self, user_id: int, headless: bool = None, debug_mode: bool = False, browser_type: str = "firefox") -> Optional[WBBrowserAutomationPro]:
         """ПОЛУЧАЕТ ИЛИ СОЗДАЕТ ОТДЕЛЬНЫЙ БРАУЗЕР ДЛЯ КАЖДОГО ПОЛЬЗОВАТЕЛЯ!"""
+        # Используем headless из конфига если не передан явно
+        if headless is None:
+            settings = get_settings()
+            headless = settings.browser.headless
+            logger.info(f"📋 Using headless from config: {headless}")
+        
         async with self._lock:
             # ПРОВЕРЯЕМ: есть ли уже браузер для ЭТОГО пользователя
             if user_id in self._browsers:

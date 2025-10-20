@@ -198,6 +198,15 @@ class PaymentSettings(BaseSettings):
         env_prefix = "PAYMENT_"
 
 
+class BrowserSettings(BaseSettings):
+    """Browser automation configuration settings."""
+    
+    headless: bool = Field(default=True, description="Run browser in headless mode")
+    
+    class Config:
+        env_prefix = "BROWSER_"
+
+
 class Settings(BaseSettings):
     """Main application settings."""
     
@@ -216,6 +225,7 @@ class Settings(BaseSettings):
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     payment: PaymentSettings = Field(default_factory=PaymentSettings)
+    browser: BrowserSettings = Field(default_factory=BrowserSettings)
     
     # Paths
     base_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent)
