@@ -67,14 +67,8 @@ async def link_extension(request: web.Request) -> web.Response:
                     'error': 'Invalid or expired link key'
                 }, status=404)
             
-            # Check if already linked
-            if ext_link.linked_at:
-                return web.json_response({
-                    'success': False,
-                    'error': 'This key has already been used'
-                }, status=400)
-            
-            # Update link status
+            # Разрешаем привязывать ключ многократно (переустановка расширения, другие устройства)
+            # Просто обновляем время привязки и активности
             ext_link.linked_at = datetime.utcnow()
             ext_link.last_activity = datetime.utcnow()
             await session.commit()
