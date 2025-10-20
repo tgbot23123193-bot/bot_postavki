@@ -472,82 +472,7 @@ async def select_coefficient(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("book_interval:"))
-async def start_auto_booking(callback: CallbackQuery, state: FSMContext):
-    """Запустить автобронирование."""
-    interval = int(callback.data.split(":")[1])
-    
-    data = await state.get_data()
-    user_id = callback.from_user.id
-    
-    # Создаем задачу
-    task_id = str(uuid.uuid4())[:8]
-    task_info = {
-        'id': task_id,
-        'warehouse_id': data['warehouse_id'],
-        'warehouse_name': data['warehouse_name'],
-        'selected_dates': data['selected_dates'],
-        'max_coefficient': data['max_coefficient'],
-        'check_interval': interval,
-        'created_at': datetime.now().isoformat(),
-        'status': 'active'
-    }
-    
-    # Сохраняем задачу
-    if user_id not in user_booking_tasks:
-        user_booking_tasks[user_id] = {}
-    user_booking_tasks[user_id][task_id] = task_info
-    
-    # Запускаем асинхронную задачу
-    task = asyncio.create_task(
-        booking_service.start_auto_booking(
-            user_id=user_id,
-            task_id=task_id,
-            warehouse_id=data['warehouse_id'],
-            warehouse_name=data['warehouse_name'],
-            supply_type="boxes",  # TODO: добавить выбор типа
-            target_dates=data['selected_dates'],
-            max_coefficient=data['max_coefficient'],
-            check_interval=interval
-        )
-    )
-    
-    # Сохраняем задачу в сервисе
-    if user_id not in booking_service.active_bookings:
-        booking_service.active_bookings[user_id] = {}
-    booking_service.active_bookings[user_id][task_id] = task
-    
-    await state.clear()
-    
-    # Форматируем даты
-    dates_str = ", ".join([
-        datetime.strptime(d, "%Y-%m-%d").strftime("%d.%m")
-        for d in sorted(data['selected_dates'])[:3]
-    ])
-    if len(data['selected_dates']) > 3:
-        dates_str += f" и еще {len(data['selected_dates']) - 3}"
-    
-    text = (
-        f"✅ <b>Автобронирование запущено!</b>\n\n"
-        f"🆔 ID задачи: {task_id}\n"
-        f"📦 Склад: {data['warehouse_name']}\n"
-        f"📅 Даты: {dates_str}\n"
-        f"💰 Макс. коэффициент: x{data['max_coefficient']}\n"
-        f"⏱ Проверка: каждые {interval} сек\n\n"
-        f"🔔 Вы получите уведомление при успешном бронировании.\n\n"
-        f"💡 Задача остановится автоматически после бронирования."
-    )
-    
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅️ В меню", callback_data="auto_booking")]
-    ])
-    
-    await callback.message.edit_text(
-        text,
-        parse_mode="HTML",
-        reply_markup=keyboard
-    )
-    await callback.answer("✅ Автобронирование запущено!", show_alert=True)
+# УДАЛЕНО: старая логика автобронирования - теперь используется browser.auto_catch_supply()
 
 
 @router.callback_query(F.data == "list_bookings")
@@ -1028,9 +953,15 @@ async def handle_end_date_selection(callback: CallbackQuery, state: FSMContext):
     )
 
 
+# УДАЛЕНО: start_auto_search - старая логика автопоиска через API
+
 @router.callback_query(F.data == "start_auto_search", BookingStates.confirming_dates)
 async def start_auto_search(callback: CallbackQuery, state: FSMContext):
-    """Запуск автопоиска слотов в периоде."""
+    """Запуск автопоиска слотов в периоде (через браузер)."""
+    await callback.answer("Используйте браузерное бронирование для автоматической ловли", show_alert=True)
+    return
+    
+    # Старая логика ниже - УДАЛИТЬ ПОЗЖЕ
     data = await state.get_data()
     supply_id = data.get('supply_id')
     start_date = data.get('start_date')
