@@ -1135,22 +1135,27 @@ class WBContentScript {
                     
                     this.showPageNotification(`🎉 Успех! ${selectedDate.dateText}`, 'success');
                     
-                    // Останавливаем автоловлю после успешного планирования
-                    this.autoCatchEnabled = false;
-                    if (this.autoCatchInterval) {
-                        clearInterval(this.autoCatchInterval);
-                        this.autoCatchInterval = null;
-                    }
+                    // НЕ останавливаем автоловлю - продолжаем искать еще слоты!
+                    // Пользователь может хотеть поймать несколько слотов
                     
-                    await chrome.storage.local.set({ autoCatchEnabled: false });
-                    
-                    // Уведомляем background
+                    // Уведомляем background для отправки в Telegram
                     chrome.runtime.sendMessage({
-                        action: 'supplyPlanned',
-                        date: selectedDate.dateText,
-                        coefficient: selectedDate.acceptance,
-                        clickCount: this.clickCount
+                        action: 'sendNotification',
+                        title: '🎉 Поставка запланирована!',
+                        message: `Дата: ${selectedDate.dateText}\nКоэффициент: ${selectedDate.acceptance}x\nКликов: ${this.clickCount}`,
+                        data: {
+                            type: 'supply_planned',
+                            date: selectedDate.dateText,
+                            coefficient: selectedDate.acceptance,
+                            clickCount: this.clickCount
+                        }
                     });
+                    
+                    // Увеличиваем счетчик успешных бронирований
+                    const stats = await chrome.storage.local.get(['autoCatchStats']);
+                    const currentStats = stats.autoCatchStats || { totalBookings: 0 };
+                    currentStats.totalBookings = (currentStats.totalBookings || 0) + 1;
+                    await chrome.storage.local.set({ autoCatchStats: currentStats });
                     
                     return true;
                 } else {

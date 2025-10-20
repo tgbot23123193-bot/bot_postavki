@@ -131,32 +131,51 @@ class PopupManager {
     async checkLinkStatus() {
         const data = await chrome.storage.local.get(['extensionLink']);
         
+        console.log('🔍 Checking link status...');
+        console.log('   Storage data:', data);
+        console.log('   extensionLink:', data.extensionLink);
+        
         const authNotLinked = document.getElementById('authNotLinked');
         const authLinked = document.getElementById('authLinked');
         const statusIndicator = document.getElementById('statusIndicator');
         
-        const isLinked = data.extensionLink && data.extensionLink.userId;
+        const isLinked = !!(data.extensionLink && data.extensionLink.userId);
+        
+        console.log('   Is linked:', isLinked);
         
         if (isLinked) {
             // Расширение привязано
-            authNotLinked.style.display = 'none';
-            authLinked.style.display = 'block';
+            console.log('✅ Extension is linked!');
             
-            document.getElementById('linkedUserId').textContent = data.extensionLink.userId;
-            document.getElementById('linkedDate').textContent = new Date(data.extensionLink.linkedAt).toLocaleString('ru-RU');
+            if (authNotLinked) authNotLinked.style.display = 'none';
+            if (authLinked) authLinked.style.display = 'block';
             
-            statusIndicator.classList.add('active');
-            statusIndicator.querySelector('.status-text').textContent = 'Подключено';
+            const userIdEl = document.getElementById('linkedUserId');
+            const dateEl = document.getElementById('linkedDate');
+            
+            if (userIdEl) userIdEl.textContent = data.extensionLink.userId;
+            if (dateEl) dateEl.textContent = new Date(data.extensionLink.linkedAt).toLocaleString('ru-RU');
+            
+            if (statusIndicator) {
+                statusIndicator.classList.add('active');
+                const statusText = statusIndicator.querySelector('.status-text');
+                if (statusText) statusText.textContent = 'Подключено';
+            }
             
             // Разблокируем вкладки
             this.unlockTabs();
         } else {
             // Расширение не привязано
-            authNotLinked.style.display = 'block';
-            authLinked.style.display = 'none';
+            console.log('❌ Extension is NOT linked');
             
-            statusIndicator.classList.remove('active');
-            statusIndicator.querySelector('.status-text').textContent = 'Не подключено';
+            if (authNotLinked) authNotLinked.style.display = 'block';
+            if (authLinked) authLinked.style.display = 'none';
+            
+            if (statusIndicator) {
+                statusIndicator.classList.remove('active');
+                const statusText = statusIndicator.querySelector('.status-text');
+                if (statusText) statusText.textContent = 'Не подключено';
+            }
             
             // Блокируем вкладки
             this.lockTabs();
@@ -240,17 +259,27 @@ class PopupManager {
             });
 
             const data = await response.json();
+            
+            console.log('📥 Response from bot:', data);
 
             if (data.success) {
+                const linkData = {
+                    userId: data.userId,
+                    botToken: data.botToken,
+                    linkKey: linkKey,
+                    linkedAt: Date.now()
+                };
+                
+                console.log('💾 Saving extension link:', linkData);
+                
                 // Сохраняем данные привязки
                 await chrome.storage.local.set({
-                    extensionLink: {
-                        userId: data.userId,
-                        botToken: data.botToken,
-                        linkKey: linkKey,
-                        linkedAt: Date.now()
-                    }
+                    extensionLink: linkData
                 });
+                
+                // Проверяем что сохранилось
+                const saved = await chrome.storage.local.get(['extensionLink']);
+                console.log('✅ Saved data verification:', saved.extensionLink);
 
                 this.showNotification('✅ Расширение успешно привязано! Теперь вы можете использовать все функции.', 'success');
                 
@@ -261,7 +290,7 @@ class PopupManager {
                 document.getElementById('linkKey').value = '';
                 
                 // Переключаемся на вкладку автоловли
-                this.switchTab('autocatch');
+                setTimeout(() => this.switchTab('autocatch'), 500);
             } else {
                 this.showNotification(data.error || 'Ошибка привязки', 'error');
             }
@@ -296,25 +325,10 @@ class PopupManager {
             'autoCatchStats', 
             'autoCatchInterval',
             'warehousesData',
-            'lastWarehousesUpdate'
+            'lastWarehousesUpdate',
+            'extensionLink'
         ]);
         
-        // Update statistics
-        const stats = data.stats || { active: 0, pending: 0, completed: 0 };
-        document.getElementById('activeDeliveries').textContent = stats.active;
-        document.getElementById('pendingDeliveries').textContent = stats.pending;
-        document.getElementById('completedDeliveries').textContent = stats.completed;
-
-        // Update deliveries list
-        if (data.deliveries && data.deliveries.length > 0) {
-            this.renderDeliveries(data.deliveries);
-        }
-
-        // Update monitoring log
-        if (data.monitoringLog && data.monitoringLog.length > 0) {
-            this.renderMonitoringLog(data.monitoringLog);
-        }
-
         // Update auto-catch stats
         if (data.autoCatchStats) {
             this.updateAutoCatchStatsDisplay(data.autoCatchStats);
@@ -325,13 +339,11 @@ class PopupManager {
             document.getElementById('autoCatchInterval').value = data.autoCatchInterval;
         }
 
-        // Update warehouses data
-        if (data.warehousesData) {
-            this.renderWarehouses(data.warehousesData, data.lastWarehousesUpdate);
-        }
-
         // Update auto-catch status
         await this.updateAutoCatchStatus();
+        
+        // Log extension link status for debugging
+        console.log('📊 Extension Link Status:', data.extensionLink);
     }
 
     renderDeliveries(deliveries) {
