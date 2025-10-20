@@ -1135,10 +1135,16 @@ class WBContentScript {
                     
                     this.showPageNotification(`🎉 Успех! ${selectedDate.dateText}`, 'success');
                     
-                    // НЕ останавливаем автоловлю - продолжаем искать еще слоты!
-                    // Пользователь может хотеть поймать несколько слотов
+                    // ОСТАНАВЛИВАЕМ автоловлю после успешного планирования
+                    this.autoCatchEnabled = false;
+                    if (this.autoCatchInterval) {
+                        clearInterval(this.autoCatchInterval);
+                        this.autoCatchInterval = null;
+                    }
                     
-                    // Уведомляем background для отправки в Telegram
+                    await chrome.storage.local.set({ autoCatchEnabled: false });
+                    
+                    // Отправляем уведомление в Telegram через бот
                     chrome.runtime.sendMessage({
                         action: 'sendNotification',
                         title: '🎉 Поставка запланирована!',
@@ -1150,12 +1156,6 @@ class WBContentScript {
                             clickCount: this.clickCount
                         }
                     });
-                    
-                    // Увеличиваем счетчик успешных бронирований
-                    const stats = await chrome.storage.local.get(['autoCatchStats']);
-                    const currentStats = stats.autoCatchStats || { totalBookings: 0 };
-                    currentStats.totalBookings = (currentStats.totalBookings || 0) + 1;
-                    await chrome.storage.local.set({ autoCatchStats: currentStats });
                     
                     return true;
                 } else {
@@ -2247,14 +2247,28 @@ class WBContentScript {
                 
                 this.showPageNotification('🎉 Перераспределение выполнено!', 'success');
                 
-                // Останавливаем
-                this.redistributeEnabled = false;
-                await chrome.storage.local.set({ redistributeEnabled: false });
+                // НЕ ОСТАНАВЛИВАЕМ! Продолжаем работать 24/7
+                // Увеличиваем счетчик
+                this.redistributeCount++;
                 
+                // Отправляем уведомление в Telegram бот
                 chrome.runtime.sendMessage({
-                    action: 'redistributeCompleted',
-                    settings: this.redistributeSettings
+                    action: 'sendNotification',
+                    title: '📦 Перераспределение выполнено!',
+                    message: `Артикул: ${this.redistributeSettings.article}\nКоличество: ${this.redistributeSettings.quantity}\nОткуда: ${this.redistributeSettings.warehouseFrom}\nКуда: ${this.redistributeSettings.warehouseTo}`,
+                    data: {
+                        type: 'redistribution_completed',
+                        article: this.redistributeSettings.article,
+                        quantity: this.redistributeSettings.quantity,
+                        warehouseFrom: this.redistributeSettings.warehouseFrom,
+                        warehouseTo: this.redistributeSettings.warehouseTo,
+                        count: this.redistributeCount
+                    }
                 });
+                
+                // Продолжаем цикл - через 5 секунд повторяем
+                console.log('⏱️ Ждем 5 секунд перед следующей попыткой...');
+                await this.sleep(5000);
             } else {
                 console.log('⚠️ Не удалось нажать кнопку "Перераспределить"');
                 await this.closeModalWithEsc();
