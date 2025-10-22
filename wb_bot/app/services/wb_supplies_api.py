@@ -372,3 +372,53 @@ class WBSuppliesAPIClient:
         except Exception as e:
             logger.error(f"❌ Ошибка создания бронирования: {e}")
             return False
+    
+    async def book_supply(
+        self, 
+        supply_id: str, 
+        warehouse_id: int, 
+        date: str, 
+        time: str = ""
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Бронирует поставку на указанную дату и время.
+        
+        Args:
+            supply_id: ID поставки
+            warehouse_id: ID склада
+            date: Дата в формате YYYY-MM-DD
+            time: Время слота (опционально)
+            
+        Returns:
+            Результат бронирования или None при ошибке
+        """
+        logger.info(f"🎯 Бронирую поставку {supply_id} на склад {warehouse_id}, дата {date}, время {time}")
+        
+        try:
+            payload = {
+                "supplyId": supply_id,
+                "warehouseId": warehouse_id,
+                "date": date
+            }
+            
+            if time:
+                payload["time"] = time
+            
+            response = await self._make_request(
+                "POST", 
+                "/supplies/booking",
+                json=payload
+            )
+            
+            logger.info(f"✅ Поставка {supply_id} успешно забронирована")
+            return {
+                "success": True,
+                "supply_id": supply_id,
+                "date": date,
+                "time": time,
+                "response": response
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка бронирования поставки {supply_id}: {e}")
+            return None

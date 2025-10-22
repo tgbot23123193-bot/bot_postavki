@@ -1250,6 +1250,9 @@ async def start_auto_booking(callback: CallbackQuery, state: FSMContext):
     warehouse_id = callback.data.split(":")[1]
     user_id = callback.from_user.id
     
+    # Импортируем новый сервис
+    from ...services.auto_booking_service import auto_booking_service
+    
     # Получаем данные из состояния
     data = await state.get_data()
     booking_supply_id = data.get("booking_supply_id")
@@ -1262,37 +1265,89 @@ async def start_auto_booking(callback: CallbackQuery, state: FSMContext):
     warehouse_name = selected_warehouse.get("name", f"Склад #{warehouse_id}")
     
     await callback.message.edit_text(
-        f"🤖 <b>Автобронирование запущено!</b>\n\n"
+        f"🤖 <b>Автобронирование запускается...</b>\n\n"
         f"📦 <b>Поставка:</b> {supply_name}\n"
         f"🏬 <b>Склад:</b> {warehouse_name}\n"
         f"📅 <b>Период:</b> {date_from} - {date_to}\n\n"
-        f"⏳ Инициализирую браузер для бронирования...",
+        f"⏳ Инициализирую систему автобронирования...",
         parse_mode="HTML"
     )
     
     try:
-        # Получаем браузер через единый менеджер (видимый для отладки)
-        browser = await browser_manager.get_browser(user_id, headless=False, debug_mode=True)
+        # Проверяем не запущено ли уже
+        if auto_booking_service.is_active(user_id):
+            await callback.message.edit_text(
+                f"⚠️ <b>Автобронирование уже запущено</b>\n\n"
+                f"У вас уже есть активная задача автобронирования.\n"
+                f"Сначала остановите её, чтобы запустить новую.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="⏹ Остановить текущее", callback_data=f"stop_auto_book:{user_id}")],
+                    [InlineKeyboardButton(text="⬅️ Назад", callback_data="view_supplies")]
+                ])
+            )
+            return
         
-        if not browser:
-            raise Exception("Не удалось запустить браузер")
+        # Callback для успешного бронирования
+        async def on_success(result):
+            await callback.bot.send_message(
+                user_id,
+                f"🎉 <b>ПОСТАВКА ЗАБРОНИРОВАНА!</b>\n\n"
+                f"📦 <b>Поставка:</b> {result['supply_name']}\n"
+                f"🏬 <b>Склад:</b> {result['warehouse_name']}\n"
+                f"📅 <b>Дата:</b> {result.get('date', 'Не указана')}\n"
+                f"⏰ <b>Время:</b> {result.get('time', 'Не указано')}\n"
+                f"⚡ <b>Коэффициент:</b> {result.get('coefficient', 0)}x\n\n"
+                f"✅ Бронирование успешно создано!\n"
+                f"🔍 Проверок выполнено: {result.get('checks_count', 0)}",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="📦 Мои поставки", callback_data="view_supplies")],
+                    [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")]
+                ])
+            )
         
-        # Сохраняем данные для автобронирования
-        monitoring_sessions[user_id] = {
-            "supply_id": booking_supply_id,
-            "warehouse_id": warehouse_id,
-            "date_from": date_from,
-            "date_to": date_to,
-            "status": "active"
-        }
+        # Callback для ошибки
+        async def on_error(error_msg):
+            await callback.bot.send_message(
+                user_id,
+                f"❌ <b>Ошибка автобронирования</b>\n\n"
+                f"{error_msg}\n\n"
+                f"Автобронирование остановлено.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"auto_book:{warehouse_id}")],
+                    [InlineKeyboardButton(text="⬅️ К поставкам", callback_data="view_supplies")]
+                ])
+            )
+        
+        # Запускаем автобронирование через новый сервис
+        started = await auto_booking_service.start_auto_booking(
+            user_id=user_id,
+            supply_id=str(booking_supply_id),
+            supply_name=supply_name,
+            warehouse_id=int(warehouse_id),
+            warehouse_name=warehouse_name,
+            date_from=date_from,
+            date_to=date_to,
+            max_coefficient=None,  # Можно добавить настройку
+            check_interval=10,  # 10 секунд между проверками
+            mode="api",  # Используем API режим (быстрее)
+            on_success=on_success,
+            on_error=on_error
+        )
+        
+        if not started:
+            raise Exception("Не удалось запустить автобронирование")
         
         await callback.message.edit_text(
             f"✅ <b>Автобронирование активно!</b>\n\n"
             f"📦 <b>Поставка:</b> {supply_name}\n"
             f"🏬 <b>Склад:</b> {warehouse_name}\n"
             f"📅 <b>Период:</b> {date_from} - {date_to}\n\n"
-            f"🔄 Бот будет проверять слоты каждые 30 секунд\n"
-            f"📬 Уведомления приходят автоматически\n\n"
+            f"🔄 Бот проверяет слоты каждые 10 секунд\n"
+            f"📬 Уведомление придет автоматически при успехе\n"
+            f"⚡ Режим: API (быстрый)\n\n"
             f"<i>Для остановки используйте кнопку ниже</i>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -1302,11 +1357,10 @@ async def start_auto_booking(callback: CallbackQuery, state: FSMContext):
             ])
         )
         
-        # Запускаем фоновую задачу автобронирования
-        asyncio.create_task(auto_booking_task(user_id, callback.bot))
-        
     except Exception as e:
         logger.error(f"❌ Ошибка запуска автобронирования: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         await callback.message.edit_text(
             f"❌ <b>Ошибка автобронирования</b>\n\n"
             f"Не удалось запустить автобронирование:\n"
@@ -1415,89 +1469,40 @@ async def check_available_slots(callback: CallbackQuery, state: FSMContext):
         )
 
 
+# СТАРАЯ ФУНКЦИЯ - ЗАМЕНЕНА НА auto_booking_service
+# Оставлена для обратной совместимости, но больше не используется
 async def auto_booking_task(user_id: int, bot):
-    """Фоновая задача автобронирования."""
+    """
+    УСТАРЕЛО: Старая фоновая задача автобронирования.
+    Заменена на auto_booking_service для лучшей надежности.
+    """
+    logger.warning(f"⚠️ Вызвана устаревшая функция auto_booking_task для пользователя {user_id}")
+    logger.warning(f"   Используйте вместо неё auto_booking_service")
+    
+    # Для обратной совместимости можно перенаправить на новый сервис
+    from ...services.auto_booking_service import auto_booking_service
+    
     session = monitoring_sessions.get(user_id)
     if not session:
         return
     
-    # Получаем браузер через единый менеджер (видимый для отладки мониторинга)
-    browser = await browser_manager.get_browser(user_id, headless=False, debug_mode=True)
-    if not browser:
-        logger.error(f"❌ Не удалось получить браузер для пользователя {user_id}")
-        return
+    supply_id = session.get("supply_id")
+    warehouse_id = session.get("warehouse_id")
+    date_from = session.get("date_from")
+    date_to = session.get("date_to")
     
-    supply_id = session["supply_id"]
-    warehouse_id = session["warehouse_id"]
-    date_from = session["date_from"]
-    date_to = session["date_to"]
-    
-    logger.info(f"🤖 Запущено автобронирование для пользователя {user_id}")
-    
-    try:
-        while session.get("status") == "active":
-            # Проверяем слоты через API
-            user = await get_user_by_telegram_id(user_id)
-            if not user or not user.api_key:
-                break
-                
-            async with WBSuppliesAPIClient(api_keys[0]) as api_client:
-                slots = await api_client.get_available_slots(
-                    warehouse_id=int(warehouse_id),
-                    date_from=date_from,
-                    date_to=date_to
-                )
-            
-            if slots:
-                # Найдены слоты! Пытаемся забронировать
-                best_slot = slots[0]  # Берем первый доступный слот
-                slot_date = best_slot.get("date")
-                
-                logger.info(f"🎯 Найден слот для бронирования: {slot_date}")
-                
-                # Пытаемся забронировать через API
-                booking_success = await api_client.create_supply_booking(
-                    supply_id=supply_id,
-                    warehouse_id=int(warehouse_id),
-                    date=slot_date
-                )
-                
-                if booking_success:
-                    # Успешное бронирование!
-                    await bot.send_message(
-                        user_id,
-                        f"🎉 <b>ПОСТАВКА ЗАБРОНИРОВАНА!</b>\n\n"
-                        f"📦 Поставка: {supply_id}\n"
-                        f"🏬 Склад: {warehouse_id}\n"
-                        f"📅 Дата: {slot_date}\n"
-                        f"⚡ Коэффициент: {best_slot.get('coefficient', 0)}x\n\n"
-                        f"✅ Бронирование успешно создано!",
-                        parse_mode="HTML"
-                    )
-                    break
-                else:
-                    logger.warning(f"⚠️ Не удалось забронировать слот {slot_date}")
-            
-            # Ждем 30 секунд перед следующей проверкой
-            await asyncio.sleep(30)
-            
-    except Exception as e:
-        logger.error(f"❌ Ошибка в автобронировании для пользователя {user_id}: {e}")
-        await bot.send_message(
-            user_id,
-            f"❌ <b>Ошибка автобронирования</b>\n\n"
-            f"Произошла ошибка в процессе автобронирования:\n"
-            f"<code>{str(e)}</code>\n\n"
-            f"Автобронирование остановлено.",
-            parse_mode="HTML"
-        )
-    finally:
-        # Очищаем сессию
-        if user_id in monitoring_sessions:
-            del monitoring_sessions[user_id]
-        await browser_manager.close_browser(user_id)
-        
-        logger.info(f"🔴 Автобронирование остановлено для пользователя {user_id}")
+    # Перенаправляем на новый сервис
+    await auto_booking_service.start_auto_booking(
+        user_id=user_id,
+        supply_id=str(supply_id),
+        supply_name=f"Поставка {supply_id}",
+        warehouse_id=int(warehouse_id),
+        warehouse_name=f"Склад {warehouse_id}",
+        date_from=date_from,
+        date_to=date_to,
+        check_interval=10,
+        mode="api"
+    )
 
 
 @router.callback_query(F.data.startswith("stop_auto_book:"))
@@ -1505,14 +1510,17 @@ async def stop_auto_booking(callback: CallbackQuery):
     """Останавливает автобронирование."""
     user_id = int(callback.data.split(":")[1])
     
-    if user_id in monitoring_sessions:
-        monitoring_sessions[user_id]["status"] = "stopped"
-        del monitoring_sessions[user_id]
-        await browser_manager.close_browser(user_id)
-        
+    # Импортируем новый сервис
+    from ...services.auto_booking_service import auto_booking_service
+    
+    # Останавливаем через новый сервис
+    stopped = await auto_booking_service.stop_auto_booking(user_id)
+    
+    if stopped:
         await callback.message.edit_text(
             "⏹ <b>Автобронирование остановлено</b>\n\n"
-            "Мониторинг слотов прекращен.",
+            "Мониторинг слотов прекращен.\n"
+            "Вы можете запустить автобронирование снова в любое время.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="📦 К поставкам", callback_data="view_supplies")],
@@ -1520,7 +1528,72 @@ async def stop_auto_booking(callback: CallbackQuery):
             ])
         )
     else:
-        await callback.answer("❌ Активное автобронирование не найдено", show_alert=True)
+        # Также проверяем старые сессии для обратной совместимости
+        if user_id in monitoring_sessions:
+            monitoring_sessions[user_id]["status"] = "stopped"
+            del monitoring_sessions[user_id]
+            await browser_manager.close_browser(user_id)
+            await callback.message.edit_text(
+                "⏹ <b>Автобронирование остановлено</b>\n\n"
+                "Мониторинг слотов прекращен.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="📦 К поставкам", callback_data="view_supplies")],
+                    [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="main_menu")]
+                ])
+            )
+        else:
+            await callback.answer("❌ Активное автобронирование не найдено", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("booking_status:"))
+async def show_booking_status(callback: CallbackQuery):
+    """Показывает статус автобронирования."""
+    user_id = int(callback.data.split(":")[1])
+    
+    # Импортируем новый сервис
+    from ...services.auto_booking_service import auto_booking_service
+    
+    session = auto_booking_service.get_session(user_id)
+    
+    if not session:
+        await callback.answer("❌ Автобронирование не активно", show_alert=True)
+        return
+    
+    # Вычисляем время работы
+    from datetime import datetime
+    running_time = datetime.now() - session.created_at
+    hours, remainder = divmod(int(running_time.total_seconds()), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    
+    status_text = (
+        f"📊 <b>Статус автобронирования</b>\n\n"
+        f"📦 <b>Поставка:</b> {session.supply_name}\n"
+        f"🏬 <b>Склад:</b> {session.warehouse_name}\n"
+        f"📅 <b>Период:</b> {session.date_from} - {session.date_to}\n"
+        f"⚡ <b>Режим:</b> {session.mode.upper()}\n"
+        f"🔄 <b>Статус:</b> {session.status}\n\n"
+        f"⏱️ <b>Время работы:</b> {hours:02d}:{minutes:02d}:{seconds:02d}\n"
+        f"🔍 <b>Проверок выполнено:</b> {session.checks_count}\n"
+        f"⏰ <b>Интервал проверки:</b> {session.check_interval}с\n"
+    )
+    
+    if session.last_check:
+        time_since_check = (datetime.now() - session.last_check).total_seconds()
+        status_text += f"🕐 <b>Последняя проверка:</b> {int(time_since_check)}с назад\n"
+    
+    if session.max_coefficient is not None:
+        status_text += f"📈 <b>Макс. коэффициент:</b> {session.max_coefficient}x\n"
+    
+    await callback.message.edit_text(
+        status_text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⏹ Остановить", callback_data=f"stop_auto_book:{user_id}")],
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data=f"booking_status:{user_id}")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="view_supplies")]
+        ])
+    )
 
 
 @router.callback_query(F.data.startswith("monitor_slots:"))
