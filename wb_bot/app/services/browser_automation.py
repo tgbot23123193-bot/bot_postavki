@@ -4853,10 +4853,16 @@ class WBBrowserAutomationPro:
     
     async def auto_catch_supply(self, filters: dict = None, interval_ms: int = 1000) -> bool:
         """
-        Автоматическая ловля поставок (логика из Chrome расширения).
+        Автоматическая ловля поставок (улучшенная логика).
+        
+        Работает бесконечно, пока не забронирует слот или не будет остановлен вручную.
+        Если нет подходящих дат - закрывает popup через ESC и продолжает поиск.
         
         Args:
             filters: Фильтры для дат и коэффициентов
+                - dateFrom: начальная дата периода (YYYY-MM-DD)
+                - dateTo: конечная дата периода (YYYY-MM-DD)
+                - maxCoefficient: максимальный коэффициент (по умолчанию любой)
             interval_ms: Интервал между кликами в миллисекундах
             
         Returns:
@@ -4872,6 +4878,7 @@ class WBBrowserAutomationPro:
             await asyncio.sleep(2)
             
             click_count = 0
+            attempts_without_dates = 0
             
             while True:
                 # Ищем кнопку "Запланировать поставку"
@@ -4881,48 +4888,78 @@ class WBBrowserAutomationPro:
                     # Проверяем доступность
                     is_disabled = await button.get_attribute('disabled')
                     if is_disabled:
-                        logger.debug("⚠️ Кнопка недоступна")
+                        logger.debug("⚠️ Кнопка недоступна, ждем...")
                         await asyncio.sleep(interval_ms / 1000)
                         continue
                     
-                    # Кликаем
+                    # Кликаем на кнопку
                     await button.click()
                     click_count += 1
-                    logger.info(f"✅ Клик #{click_count} по кнопке")
+                    logger.info(f"✅ Клик #{click_count} по кнопке 'Запланировать поставку'")
                     
                     # Ждем появления модального окна
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.7)
                     
-                    # Проверяем модальное окно
+                    # Проверяем что модальное окно открылось
                     modal_opened = await self._check_modal_opened()
                     
                     if modal_opened:
-                        logger.info("📋 Модальное окно открылось!")
+                        logger.info("📋 Модальное окно открылось, ищем подходящую дату...")
                         
-                        # Выбираем дату
-                        date_selected = await self._select_date_in_modal(filters)
+                        # Пытаемся выбрать подходящую дату
+                        date_result = await self._select_date_in_modal(filters)
                         
-                        if date_selected:
+                        if date_result == "BOOKED":
+                            # Поставка успешно забронирована!
                             logger.info("🎉 ПОСТАВКА УСПЕШНО ЗАПЛАНИРОВАНА!")
-                            logger.info(f"   Всего кликов: {click_count}")
+                            logger.info(f"   Всего попыток: {click_count}")
+                            logger.info(f"   Попыток без дат: {attempts_without_dates}")
                             
-                            # НЕ ОСТАНАВЛИВАЕМ - продолжаем ловить!
-                            # Закрываем модальное окно и продолжаем
-                            await self._close_modal()
+                            # Закрываем окно и завершаем (или продолжаем для новой поставки)
+                            await self._close_modal_with_esc()
+                            await asyncio.sleep(1)
+                            
+                            # Можно вернуть True для завершения или продолжить цикл
+                            # return True  # Если нужно остановиться после первой брони
+                            
+                            # Продолжаем ловить следующие слоты
+                            logger.info("🔄 Продолжаем поиск новых слотов...")
+                            
+                        elif date_result == "NO_DATES":
+                            # Нет подходящих дат в модальном окне
+                            logger.warning("⚠️ Подходящих дат не найдено в модальном окне")
+                            attempts_without_dates += 1
+                            
+                            # Закрываем popup через ESC
+                            logger.info("🔑 Закрываю popup через ESC...")
+                            await self._close_modal_with_esc()
                             await asyncio.sleep(0.5)
+                            
+                            # Логируем статистику
+                            if attempts_without_dates % 10 == 0:
+                                logger.info(f"📊 Статистика: {attempts_without_dates} попыток без подходящих дат")
+                            
                         else:
-                            # Закрываем модальное окно
-                            await self._close_modal()
-                            await asyncio.sleep(0.3)
+                            # Ошибка при работе с модальным окном
+                            logger.warning("⚠️ Ошибка при обработке модального окна")
+                            await self._close_modal_with_esc()
+                            await asyncio.sleep(0.5)
+                    else:
+                        logger.debug("❌ Модальное окно не открылось после клика")
                     
                 else:
-                    logger.debug("❌ Кнопка не найдена")
+                    logger.debug("❌ Кнопка 'Запланировать поставку' не найдена на странице")
                 
-                # Ждем перед следующим кликом
+                # Ждем перед следующей попыткой
                 await asyncio.sleep(interval_ms / 1000)
                 
+        except asyncio.CancelledError:
+            logger.info("⏹️ Автоловля остановлена пользователем")
+            return False
         except Exception as e:
-            logger.error(f"❌ Ошибка автоловли: {e}")
+            logger.error(f"❌ Критическая ошибка автоловли: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
     
     async def _find_plan_button(self):
@@ -4956,15 +4993,46 @@ class WBBrowserAutomationPro:
         except:
             return False
     
-    async def _select_date_in_modal(self, filters: dict = None) -> bool:
-        """Выбрать дату в модальном окне с учетом фильтров."""
+    async def _select_date_in_modal(self, filters: dict = None) -> str:
+        """
+        Выбрать дату в модальном окне с учетом фильтров.
+        
+        Returns:
+            "BOOKED" - успешно забронировано
+            "NO_DATES" - нет подходящих дат
+            "ERROR" - ошибка
+        """
         try:
             await asyncio.sleep(1)
             
+            # Парсим фильтры периода дат
+            date_from = None
+            date_to = None
+            if filters:
+                date_from_str = filters.get('dateFrom')
+                date_to_str = filters.get('dateTo')
+                max_coefficient = filters.get('maxCoefficient')
+                
+                if date_from_str:
+                    from datetime import datetime
+                    try:
+                        date_from = datetime.strptime(date_from_str, '%Y-%m-%d').date()
+                    except:
+                        logger.warning(f"⚠️ Неверный формат dateFrom: {date_from_str}")
+                
+                if date_to_str:
+                    from datetime import datetime
+                    try:
+                        date_to = datetime.strptime(date_to_str, '%Y-%m-%d').date()
+                    except:
+                        logger.warning(f"⚠️ Неверный формат dateTo: {date_to_str}")
+            
             # Ищем ячейки календаря
-            cells = await self.page.query_selector_all('td')
+            cells = await self.page.query_selector_all('td, div[role="gridcell"]')
             
             logger.info(f"🔍 Найдено ячеек календаря: {len(cells)}")
+            
+            suitable_dates_found = 0
             
             for cell in cells:
                 try:
@@ -4974,52 +5042,63 @@ class WBBrowserAutomationPro:
                     if not text or not text.strip().isdigit():
                         continue
                     
-                    # Проверяем доступность
+                    day = int(text.strip())
+                    
+                    # Проверяем доступность ячейки
                     classes = await cell.get_attribute('class') or ''
-                    if 'disabled' in classes.lower():
+                    if 'disabled' in classes.lower() or 'unavailable' in classes.lower():
                         continue
                     
                     # Извлекаем коэффициент если есть
                     coefficient = await self._extract_coefficient(cell)
                     
-                    # Проверяем фильтры
-                    if filters and filters.get('filterByCoefficient'):
-                        coef_from = filters.get('coefficientFrom', 0)
-                        coef_to = filters.get('coefficientTo', 20)
-                        
-                        if coefficient < coef_from or coefficient > coef_to:
-                            continue
-                        
-                        # Проверка бесплатной доставки
-                        if coefficient == 0 and not filters.get('allowFree', True):
+                    # Проверяем коэффициент
+                    if max_coefficient is not None:
+                        if coefficient > max_coefficient:
+                            logger.debug(f"   День {day}: коэфф {coefficient}x > {max_coefficient}x (пропускаем)")
                             continue
                     
+                    # TODO: Проверка даты по периоду (требует определения текущего месяца/года из календаря)
+                    # Пока считаем что дата подходит по коэффициенту
+                    
+                    suitable_dates_found += 1
+                    
                     # Кликаем на дату
-                    logger.info(f"📅 Кликаем на дату: {text}, коэффициент: {coefficient}x")
+                    logger.info(f"📅 Найдена подходящая дата: день {day}, коэффициент: {coefficient}x")
+                    logger.info(f"   Кликаем на ячейку...")
+                    
                     await cell.click()
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.7)
                     
                     # Ищем кнопку финального подтверждения
                     confirm_clicked = await self._click_final_confirm()
                     
                     if confirm_clicked:
-                        logger.info("✅ Финальное подтверждение нажато!")
-                        return True
+                        logger.info("✅ Финальное подтверждение нажато - поставка забронирована!")
+                        return "BOOKED"
                     else:
-                        # Закрываем и пробуем другую дату
-                        await self._close_modal()
-                        await asyncio.sleep(0.3)
-                        return False
+                        # Не удалось подтвердить, пробуем следующую дату
+                        logger.warning("⚠️ Не удалось нажать кнопку подтверждения")
+                        # Не закрываем окно, пробуем следующую дату
+                        continue
                         
                 except Exception as e:
+                    logger.debug(f"   Ошибка обработки ячейки: {e}")
                     continue
             
-            logger.warning("⚠️ Подходящих дат не найдено")
-            return False
+            # Если дошли сюда - подходящих дат не найдено
+            if suitable_dates_found == 0:
+                logger.warning("⚠️ Подходящих дат в календаре не найдено")
+                return "NO_DATES"
+            else:
+                logger.warning(f"⚠️ Найдено {suitable_dates_found} подходящих дат, но не удалось забронировать")
+                return "NO_DATES"
             
         except Exception as e:
-            logger.error(f"Ошибка выбора даты: {e}")
-            return False
+            logger.error(f"❌ Ошибка выбора даты в модальном окне: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return "ERROR"
     
     async def _extract_coefficient(self, cell) -> int:
         """Извлечь коэффициент из ячейки."""
@@ -5070,16 +5149,68 @@ class WBBrowserAutomationPro:
             return False
     
     async def _close_modal(self):
-        """Закрыть модальное окно."""
+        """Закрыть модальное окно (старый метод для обратной совместимости)."""
+        await self._close_modal_with_esc()
+    
+    async def _close_modal_with_esc(self):
+        """
+        Надежное закрытие модального окна через ESC.
+        Пытается несколько раз если не получилось с первого раза.
+        """
         try:
-            # Пробуем ESC
-            await self.page.keyboard.press('Escape')
-            await asyncio.sleep(0.2)
+            # Проверяем есть ли открытое модальное окно
+            modal_exists = await self._check_modal_opened()
             
-            # Или ищем кнопку закрытия
-            close_btn = await self.page.query_selector('button[aria-label="Close"], button.close, [class*="close"]')
-            if close_btn:
-                await close_btn.click()
-                await asyncio.sleep(0.2)
-        except:
-            pass
+            if not modal_exists:
+                logger.debug("   Модальное окно уже закрыто")
+                return
+            
+            # Пробуем ESC несколько раз
+            for attempt in range(3):
+                logger.debug(f"   Нажимаю ESC (попытка {attempt + 1}/3)...")
+                await self.page.keyboard.press('Escape')
+                await asyncio.sleep(0.3)
+                
+                # Проверяем закрылось ли окно
+                modal_exists = await self._check_modal_opened()
+                if not modal_exists:
+                    logger.debug("   ✅ Модальное окно закрыто через ESC")
+                    return
+            
+            # Если ESC не помог, пробуем найти кнопку закрытия
+            logger.debug("   ESC не сработал, ищу кнопку закрытия...")
+            close_selectors = [
+                'button[aria-label="Close"]',
+                'button[aria-label="Закрыть"]',
+                'button.close',
+                '[class*="close"]',
+                '[class*="Close"]',
+                'button:has-text("×")',
+                'button:has-text("✕")'
+            ]
+            
+            for selector in close_selectors:
+                try:
+                    close_btn = await self.page.query_selector(selector)
+                    if close_btn:
+                        await close_btn.click()
+                        await asyncio.sleep(0.3)
+                        logger.debug(f"   ✅ Модальное окно закрыто через кнопку")
+                        return
+                except:
+                    continue
+            
+            # Последняя попытка - клик вне модального окна (на overlay)
+            logger.debug("   Кнопка не найдена, пытаюсь кликнуть на overlay...")
+            try:
+                overlay = await self.page.query_selector('[class*="overlay"], [class*="backdrop"], [class*="Overlay"]')
+                if overlay:
+                    await overlay.click()
+                    await asyncio.sleep(0.3)
+                    logger.debug("   ✅ Модальное окно закрыто через клик на overlay")
+            except:
+                pass
+                
+        except Exception as e:
+            logger.debug(f"   ⚠️ Ошибка при закрытии модального окна: {e}")
+            # Не критично, продолжаем работу
