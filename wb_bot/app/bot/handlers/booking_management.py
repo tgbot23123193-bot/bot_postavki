@@ -1288,38 +1288,85 @@ async def start_auto_booking(callback: CallbackQuery, state: FSMContext):
             )
             return
         
-        # Callback для успешного бронирования
-        async def on_success(result):
-            await callback.bot.send_message(
-                user_id,
-                f"🎉 <b>ПОСТАВКА ЗАБРОНИРОВАНА!</b>\n\n"
-                f"📦 <b>Поставка:</b> {result['supply_name']}\n"
-                f"🏬 <b>Склад:</b> {result['warehouse_name']}\n"
-                f"📅 <b>Дата:</b> {result.get('date', 'Не указана')}\n"
-                f"⏰ <b>Время:</b> {result.get('time', 'Не указано')}\n"
-                f"⚡ <b>Коэффициент:</b> {result.get('coefficient', 0)}x\n\n"
-                f"✅ Бронирование успешно создано!\n"
-                f"🔍 Проверок выполнено: {result.get('checks_count', 0)}",
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="📦 Мои поставки", callback_data="view_supplies")],
-                    [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")]
-                ])
-            )
+        # Сохраняем ID сообщения для обновления статуса
+        status_message = await callback.message.edit_text(
+            f"🤖 <b>Автобронирование запущено!</b>\n\n"
+            f"📦 <b>Поставка:</b> {supply_name}\n"
+            f"🏬 <b>Склад:</b> {warehouse_name}\n"
+            f"📅 <b>Период:</b> {date_from} - {date_to}\n\n"
+            f"🔄 <b>Статус:</b> Инициализация...\n"
+            f"🔍 <b>Попыток:</b> 0\n\n"
+            f"⏳ Бот работает в фоновом режиме",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⏹ Остановить", callback_data=f"stop_auto_book:{user_id}")],
+                [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")]
+            ])
+        )
         
-        # Callback для ошибки
-        async def on_error(error_msg):
-            await callback.bot.send_message(
-                user_id,
-                f"❌ <b>Ошибка автобронирования</b>\n\n"
-                f"{error_msg}\n\n"
-                f"Автобронирование остановлено.",
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"auto_book:{warehouse_id}")],
-                    [InlineKeyboardButton(text="⬅️ К поставкам", callback_data="view_supplies")]
-                ])
-            )
+        # Callback для успешного бронирования - ТОЛЬКО УСПЕХ
+        async def on_success(result):
+            try:
+                await status_message.edit_text(
+                    f"🎉 <b>ПОСТАВКА ЗАБРОНИРОВАНА!</b>\n\n"
+                    f"📦 <b>Поставка:</b> {result['supply_name']}\n"
+                    f"🏬 <b>Склад:</b> {result['warehouse_name']}\n"
+                    f"📅 <b>Дата:</b> {result.get('date', 'Не указана')}\n"
+                    f"⏰ <b>Время:</b> {result.get('time', 'Не указано')}\n"
+                    f"⚡ <b>Коэффициент:</b> {result.get('coefficient', 0)}x\n\n"
+                    f"✅ Бронирование успешно создано!\n"
+                    f"🔍 Всего попыток: {result.get('checks_count', 0)}",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="📦 Мои заказы", callback_data="my_orders")],
+                        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")]
+                    ])
+                )
+            except:
+                # Если не получилось отредактировать - отправляем новое
+                await callback.bot.send_message(
+                    user_id,
+                    f"🎉 <b>ПОСТАВКА ЗАБРОНИРОВАНА!</b>\n\n"
+                    f"📦 <b>Поставка:</b> {result['supply_name']}\n"
+                    f"🏬 <b>Склад:</b> {result['warehouse_name']}\n"
+                    f"📅 <b>Дата:</b> {result.get('date', 'Не указана')}\n"
+                    f"⏰ <b>Время:</b> {result.get('time', 'Не указано')}\n"
+                    f"⚡ <b>Коэффициент:</b> {result.get('coefficient', 0)}x\n\n"
+                    f"✅ Бронирование успешно создано!\n"
+                    f"🔍 Всего попыток: {result.get('checks_count', 0)}",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="📦 Мои заказы", callback_data="my_orders")],
+                        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")]
+                    ])
+                )
+        
+        # Callback для обновления статуса (БЕЗ ОШИБОК!)
+        async def on_status_update(status_data):
+            """Обновляет статус в сообщении каждые N секунд"""
+            try:
+                checks = status_data.get('checks_count', 0)
+                status = status_data.get('status_text', 'Поиск слотов...')
+                
+                await status_message.edit_text(
+                    f"🤖 <b>Автобронирование активно</b>\n\n"
+                    f"📦 <b>Поставка:</b> {supply_name}\n"
+                    f"🏬 <b>Склад:</b> {warehouse_name}\n"
+                    f"📅 <b>Период:</b> {date_from} - {date_to}\n\n"
+                    f"🔄 <b>Статус:</b> {status}\n"
+                    f"🔍 <b>Попыток:</b> {checks}\n\n"
+                    f"⏳ Бот работает в фоновом режиме",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="⏹ Остановить", callback_data=f"stop_auto_book:{user_id}")],
+                        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")]
+                    ])
+                )
+            except Exception as e:
+                # Игнорируем ошибки обновления (например message is not modified)
+                pass
+        
+        # НЕТ CALLBACK ДЛЯ ОШИБОК - БОТ ЛОВИТ МОЛЧА!
         
         # Запускаем автобронирование через новый сервис
         started = await auto_booking_service.start_auto_booking(
@@ -1334,28 +1381,15 @@ async def start_auto_booking(callback: CallbackQuery, state: FSMContext):
             check_interval=10,  # 10 секунд между проверками
             mode="api",  # Используем API режим (быстрее)
             on_success=on_success,
-            on_error=on_error
+            on_status_update=on_status_update  # Обновление статуса вместо ошибок!
         )
         
         if not started:
             raise Exception("Не удалось запустить автобронирование")
         
-        await callback.message.edit_text(
-            f"✅ <b>Автобронирование активно!</b>\n\n"
-            f"📦 <b>Поставка:</b> {supply_name}\n"
-            f"🏬 <b>Склад:</b> {warehouse_name}\n"
-            f"📅 <b>Период:</b> {date_from} - {date_to}\n\n"
-            f"🔄 Бот проверяет слоты каждые 10 секунд\n"
-            f"📬 Уведомление придет автоматически при успехе\n"
-            f"⚡ Режим: API (быстрый)\n\n"
-            f"<i>Для остановки используйте кнопку ниже</i>",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="⏹ Остановить автобронирование", callback_data=f"stop_auto_book:{user_id}")],
-                [InlineKeyboardButton(text="📊 Статус", callback_data=f"booking_status:{user_id}")],
-                [InlineKeyboardButton(text="⬅️ К поставкам", callback_data="view_supplies")]
-            ])
-        )
+        # Сообщение уже обновлено выше в status_message
+        # Просто логируем успешный запуск
+        logger.info(f"✅ Автобронирование успешно запущено для пользователя {user_id}")
         
     except Exception as e:
         logger.error(f"❌ Ошибка запуска автобронирования: {e}")
@@ -1544,6 +1578,72 @@ async def stop_auto_booking(callback: CallbackQuery):
             )
         else:
             await callback.answer("❌ Активное автобронирование не найдено", show_alert=True)
+
+
+@router.callback_query(F.data == "my_orders")
+async def show_my_orders(callback: CallbackQuery):
+    """Показывает активные заказы (автоловки) пользователя."""
+    user_id = callback.from_user.id
+    
+    # Импортируем новый сервис
+    from ...services.auto_booking_service import auto_booking_service
+    
+    # Проверяем есть ли активная сессия
+    session = auto_booking_service.get_session(user_id)
+    
+    if not session:
+        await callback.message.edit_text(
+            "📦 <b>Мои заказы</b>\n\n"
+            "❌ У вас нет активных автоловок\n\n"
+            "Запустите автобронирование через:\n"
+            "Управление поставками → Выбрать поставку → 🤖 Автобронирование",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📦 Управление поставками", callback_data="view_supplies")],
+                [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")]
+            ])
+        )
+        return
+    
+    # Вычисляем время работы
+    from datetime import datetime
+    running_time = datetime.now() - session.created_at
+    hours, remainder = divmod(int(running_time.total_seconds()), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    
+    # Определяем статус
+    status_emoji = {
+        "active": "🔄",
+        "completed": "✅",
+        "stopped": "⏹️",
+        "error": "⚠️"
+    }
+    
+    status_text = {
+        "active": "Активно - ловит поставку",
+        "completed": "Завершено - поставка забронирована",
+        "stopped": "Остановлено",
+        "error": "Ошибка (продолжаю попытки)"
+    }
+    
+    await callback.message.edit_text(
+        f"📦 <b>Мои активные заказы</b>\n\n"
+        f"{status_emoji.get(session.status, '🔄')} <b>Автоловля #{user_id}</b>\n\n"
+        f"📦 <b>Поставка:</b> {session.supply_name}\n"
+        f"🏬 <b>Склад:</b> {session.warehouse_name}\n"
+        f"📅 <b>Период:</b> {session.date_from} - {session.date_to}\n"
+        f"⚡ <b>Режим:</b> {session.mode.upper()}\n\n"
+        f"🔄 <b>Статус:</b> {status_text.get(session.status, 'Неизвестно')}\n"
+        f"🔍 <b>Попыток выполнено:</b> {session.checks_count}\n"
+        f"⏱️ <b>Работает:</b> {hours:02d}:{minutes:02d}:{seconds:02d}\n"
+        f"⏰ <b>Интервал проверки:</b> {session.check_interval}с\n",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data="my_orders")],
+            [InlineKeyboardButton(text="⏹ Остановить", callback_data=f"stop_auto_book:{user_id}")],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")]
+        ])
+    )
 
 
 @router.callback_query(F.data.startswith("booking_status:"))

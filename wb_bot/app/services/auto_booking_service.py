@@ -66,7 +66,7 @@ class AutoBookingService:
         check_interval: int = 10,
         mode: str = "api",
         on_success: Optional[Callable] = None,
-        on_error: Optional[Callable] = None
+        on_status_update: Optional[Callable] = None
     ) -> bool:
         """
         Запустить автобронирование для пользователя.
@@ -83,7 +83,7 @@ class AutoBookingService:
             check_interval: Интервал проверки в секундах
             mode: Режим работы ("api" или "browser")
             on_success: Callback при успешном бронировании
-            on_error: Callback при ошибке
+            on_status_update: Callback для обновления статуса (без ошибок!)
             
         Returns:
             True если запущено успешно, False если уже запущено
@@ -122,11 +122,11 @@ class AutoBookingService:
         # Запускаем фоновую задачу
         if mode == "browser":
             task = asyncio.create_task(
-                self._run_browser_mode(session, on_success, on_error)
+                self._run_browser_mode(session, on_success, on_status_update)
             )
         else:
             task = asyncio.create_task(
-                self._run_api_mode(session, on_success, on_error)
+                self._run_api_mode(session, on_success, on_status_update)
             )
         
         self.tasks[user_id] = task
@@ -179,7 +179,7 @@ class AutoBookingService:
         self, 
         session: AutoBookingSession,
         on_success: Optional[Callable] = None,
-        on_error: Optional[Callable] = None
+        on_status_update: Optional[Callable] = None
     ):
         """
         Режим автобронирования через API.
@@ -198,8 +198,9 @@ class AutoBookingService:
                 error_msg = "❌ Нет API ключей для автобронирования"
                 logger.error(error_msg)
                 session.status = "error"
-                if on_error:
-                    await on_error(error_msg)
+                # НЕ ОТПРАВЛЯЕМ ОШИБКУ ПОЛЬЗОВАТЕЛЮ - ПРОСТО ЖДЕМ И ПРОБУЕМ ЕЩЕ
+                await asyncio.sleep(30)
+                # Пробуем снова получить API ключи
                 return
             
             api_key = api_keys[0]
@@ -212,6 +213,13 @@ class AutoBookingService:
                     
                     logger.debug(f"🔍 Проверка #{session.checks_count} для пользователя {user_id}")
                     
+                    # Обновляем статус каждые 3 проверки (каждые 30 сек при интервале 10)
+                    if on_status_update and session.checks_count % 3 == 0:
+                        await on_status_update({
+                            'checks_count': session.checks_count,
+                            'status_text': 'Проверяю доступные слоты...'
+                        })
+                    
                     # Проверяем доступные слоты через API
                     async with WBSuppliesAPIClient(api_key) as api_client:
                         slots = await api_client.get_available_slots(
@@ -222,6 +230,12 @@ class AutoBookingService:
                     
                     if not slots:
                         logger.debug(f"   Слоты не найдены. Ожидание {session.check_interval}с...")
+                        # Обновляем статус
+                        if on_status_update and session.checks_count % 3 == 0:
+                            await on_status_update({
+                                'checks_count': session.checks_count,
+                                'status_text': 'Слоты не найдены, продолжаю поиск...'
+                            })
                         await asyncio.sleep(session.check_interval)
                         continue
                     
@@ -244,6 +258,12 @@ class AutoBookingService:
                             f"   Подходящих слотов не найдено "
                             f"(макс. коэфф: {session.max_coefficient})"
                         )
+                        # Обновляем статус
+                        if on_status_update and session.checks_count % 3 == 0:
+                            await on_status_update({
+                                'checks_count': session.checks_count,
+                                'status_text': f'Слоты найдены, но коэффициент высокий. Ищу лучшие...'
+                            })
                         await asyncio.sleep(session.check_interval)
                         continue
                     
@@ -259,6 +279,13 @@ class AutoBookingService:
                         f"   Время: {slot_time}\n"
                         f"   Коэффициент: {slot_coefficient}x"
                     )
+                    
+                    # Обновляем статус - пытаемся забронировать
+                    if on_status_update:
+                        await on_status_update({
+                            'checks_count': session.checks_count,
+                            'status_text': f'Найден слот! Бронирую дату {slot_date}...'
+                        })
                     
                     # Пытаемся забронировать
                     success = await self._book_slot_via_api(
@@ -287,6 +314,7 @@ class AutoBookingService:
                         break
                     else:
                         logger.warning(f"⚠️ Не удалось забронировать слот. Продолжаем поиск...")
+                        # НЕ УВЕДОМЛЯЕМ ПОЛЬЗОВАТЕЛЯ ОБ ОШИБКЕ - ПРОСТО ПРОДОЛЖАЕМ
                         await asyncio.sleep(session.check_interval)
                         
                 except asyncio.CancelledError:
@@ -307,8 +335,7 @@ class AutoBookingService:
             logger.error(traceback.format_exc())
             session.status = "error"
             
-            if on_error:
-                await on_error(error_msg)
+            # НЕ УВЕДОМЛЯЕМ ПОЛЬЗОВАТЕЛЯ - ОН МОЖЕТ ЗАЙТИ В "МОИ ЗАКАЗЫ" И ПОСМОТРЕТЬ
         finally:
             # Очистка
             if user_id in self.active_sessions:
@@ -320,7 +347,7 @@ class AutoBookingService:
         self,
         session: AutoBookingSession,
         on_success: Optional[Callable] = None,
-        on_error: Optional[Callable] = None
+        on_status_update: Optional[Callable] = None
     ):
         """
         Режим автобронирования через браузер.
@@ -343,8 +370,7 @@ class AutoBookingService:
                 error_msg = "❌ Не удалось получить браузер"
                 logger.error(error_msg)
                 session.status = "error"
-                if on_error:
-                    await on_error(error_msg)
+                # НЕ УВЕДОМЛЯЕМ ПОЛЬЗОВАТЕЛЯ - ПРОСТО ЛОГИРУЕМ
                 return
             
             # Создаем автоматизацию
@@ -394,8 +420,7 @@ class AutoBookingService:
             logger.error(traceback.format_exc())
             session.status = "error"
             
-            if on_error:
-                await on_error(error_msg)
+            # НЕ УВЕДОМЛЯЕМ ПОЛЬЗОВАТЕЛЯ ОБ ОШИБКАХ
         finally:
             # Закрываем браузер
             if browser:

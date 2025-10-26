@@ -70,21 +70,25 @@ def get_main_menu() -> InlineKeyboardMarkup:
                 callback_data="view_supplies"
             ),
             InlineKeyboardButton(
-                text="🔌 Расширение Chrome",
-                callback_data="extension_info"
+                text="🛒 Мои заказы",
+                callback_data="my_orders"
             )
         ],
         [
             InlineKeyboardButton(
+                text="🔌 Расширение Chrome",
+                callback_data="extension_info"
+            ),
+            InlineKeyboardButton(
                 text="💰 Баланс",
                 callback_data="wallet_main"
-            ),
+            )
+        ],
+        [
             InlineKeyboardButton(
                 text="🔑 API ключи",
                 callback_data=MainMenuCallback(action="api_keys").pack()
             ),
-        ],
-        [
             InlineKeyboardButton(
                 text="❓ Помощь",
                 callback_data=MainMenuCallback(action="help").pack()
