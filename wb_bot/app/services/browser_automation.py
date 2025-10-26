@@ -1088,6 +1088,128 @@ class WBBrowserAutomationPro:
             logger.error(f"❌ Ошибка поиска даты с максимальным коэффициентом: {e}")
             return None
     
+    async def _find_first_available_date_with_min_hours(self, available_dates, min_hours_ahead: int) -> datetime:
+        """
+        Ищет ПЕРВУЮ активную (доступную) дату которая НЕ БЛИЖЕ чем min_hours_ahead часов от текущего времени.
+        
+        Args:
+            available_dates: Playwright locator с доступными датами
+            min_hours_ahead: Минимальное количество часов вперед (обычно 72-80)
+            
+        Returns:
+            datetime объект с первой подходящей датой или None
+        """
+        try:
+            from datetime import datetime, timedelta
+            
+            min_date = datetime.now() + timedelta(hours=min_hours_ahead)
+            logger.info(f"🔍 Ищу ПЕРВУЮ доступную дату не ближе {min_hours_ahead}ч (минимум: {min_date.strftime('%d.%m.%Y %H:%M')})")
+            
+            count = await available_dates.count()
+            
+            for i in range(count):
+                date_element = available_dates.nth(i)
+                
+                try:
+                    # Получаем текст даты
+                    date_text = await date_element.text_content()
+                    if not date_text:
+                        continue
+                    
+                    # Парсим дату
+                    parsed_date = self._parse_date_text(date_text)
+                    if not parsed_date:
+                        continue
+                    
+                    # Проверяем что дата не ближе чем min_hours_ahead
+                    if parsed_date >= min_date:
+                        logger.info(f"✅ Найдена подходящая дата: {parsed_date.strftime('%d.%m.%Y')} (>= {min_date.strftime('%d.%m.%Y %H:%M')})")
+                        return parsed_date
+                    else:
+                        logger.debug(f"⏭️ Дата {parsed_date.strftime('%d.%m.%Y')} слишком близко, ищу дальше...")
+                        
+                except Exception as e:
+                    logger.debug(f"Ошибка обработки даты {i}: {e}")
+                    continue
+            
+            logger.warning(f"⚠️ Не найдено дат не ближе {min_hours_ahead}ч")
+            return None
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка поиска первой доступной даты: {e}")
+            return None
+    
+    async def _find_max_coefficient_date_with_min_hours(self, available_dates, min_hours_ahead: int) -> datetime:
+        """
+        Ищет дату с максимальным коэффициентом которая НЕ БЛИЖЕ чем min_hours_ahead часов.
+        
+        Args:
+            available_dates: Playwright locator с доступными датами
+            min_hours_ahead: Минимальное количество часов вперед
+            
+        Returns:
+            datetime объект с датой максимального коэффициента или None
+        """
+        try:
+            from datetime import datetime, timedelta
+            
+            min_date = datetime.now() + timedelta(hours=min_hours_ahead)
+            logger.info(f"📊 Ищу дату с максимальным коэффициентом (не ближе {min_hours_ahead}ч)...")
+            
+            max_coefficient = 0
+            best_date = None
+            count = await available_dates.count()
+            
+            for i in range(count):
+                date_element = available_dates.nth(i)
+                
+                try:
+                    # Получаем текст даты
+                    date_text = await date_element.text_content()
+                    if not date_text:
+                        continue
+                    
+                    # Парсим дату
+                    parsed_date = self._parse_date_text(date_text)
+                    if not parsed_date:
+                        continue
+                    
+                    # Проверяем что дата не ближе чем min_hours_ahead
+                    if parsed_date < min_date:
+                        logger.debug(f"⏭️ Дата {parsed_date.strftime('%d.%m.%Y')} слишком близко, пропускаю")
+                        continue
+                    
+                    # Ищем коэффициент в тексте (может быть рядом с датой)
+                    coefficient_text = await self._find_coefficient_for_date(date_element)
+                    
+                    if coefficient_text:
+                        try:
+                            coefficient = float(coefficient_text.replace(',', '.'))
+                            logger.info(f"📊 Дата: {date_text}, коэффициент: {coefficient}")
+                            
+                            if coefficient > max_coefficient:
+                                max_coefficient = coefficient
+                                best_date = parsed_date
+                                logger.info(f"🏆 Новый максимум: коэффициент {coefficient} для даты {best_date}")
+                        except (ValueError, TypeError):
+                            logger.debug(f"Не удалось конвертировать коэффициент: {coefficient_text}")
+                            continue
+                            
+                except Exception as e:
+                    logger.debug(f"Ошибка обработки даты {i}: {e}")
+                    continue
+            
+            if best_date:
+                logger.info(f"🎯 Найдена лучшая дата: {best_date} с коэффициентом {max_coefficient}")
+                return best_date
+            else:
+                logger.warning("⚠️ Не найдено дат с коэффициентами")
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка поиска даты с максимальным коэффициентом: {e}")
+            return None
+    
     async def _find_coefficient_for_date(self, date_element) -> str:
         """
         Ищет коэффициент для конкретной даты.
@@ -3662,16 +3784,19 @@ class WBBrowserAutomationPro:
                                 else:
                                     logger.info(f"📊 Найдена дата с подходящим коэффициентом: {target_date}")
                             elif use_max_coefficient:
-                                # Найдем дату с максимальным коэффициентом
-                                target_date = await self._find_max_coefficient_date(available_dates)
+                                # Найдем дату с максимальным коэффициентом (НЕ БЛИЖЕ чем min_hours_ahead)
+                                target_date = await self._find_max_coefficient_date_with_min_hours(available_dates, min_hours_ahead)
                                 if not target_date:
-                                    # Если не нашли с коэффициентом, используем дату через 3 дня
-                                    target_date = datetime.now() + timedelta(days=3)
-                                logger.info(f"📊 Используем дату с максимальным коэффициентом: {target_date}")
+                                    # Если не нашли, используем минимальную допустимую дату
+                                    target_date = datetime.now() + timedelta(hours=min_hours_ahead)
+                                logger.info(f"📊 Используем дату с максимальным коэффициентом (не ближе {min_hours_ahead}ч): {target_date}")
                             else:
-                                # По умолчанию: через 3 дня
-                                target_date = datetime.now() + timedelta(days=3)
-                                logger.info(f"🎯 Используем стандартную дату (через 3 дня): {target_date}")
+                                # По умолчанию: ПЕРВАЯ активная дата НЕ БЛИЖЕ чем min_hours_ahead
+                                target_date = await self._find_first_available_date_with_min_hours(available_dates, min_hours_ahead)
+                                if not target_date:
+                                    # Если не нашли активную дату, используем минимальную допустимую
+                                    target_date = datetime.now() + timedelta(hours=min_hours_ahead)
+                                logger.info(f"🎯 Используем ПЕРВУЮ доступную дату (не ближе {min_hours_ahead}ч = {min_hours_ahead/24:.1f} дней): {target_date}")
                             
                             target_day = target_date.day
                             target_month = target_date.month
