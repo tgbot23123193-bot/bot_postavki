@@ -3706,7 +3706,11 @@ class WBBrowserAutomationPro:
                 
                 # Селекторы для поиска доступных дат в календаре WB
                 date_selectors = [
-                    # ТОЧНЫЙ селектор из предоставленного HTML
+                    # УНИВЕРСАЛЬНЫЕ - пробуем ВСЕ элементы с датами
+                    'td',  # Все ячейки таблицы
+                    'div[role="gridcell"]',  # Все ячейки сетки
+                    '[class*="cell"]',  # Любые элементы с "cell" в классе
+                    # ТОЧНЫЕ селекторы из HTML WB
                     'div[class*="Calendar-cell__date-container"][data-testid*="calendar-cell-date"]',
                     '[data-testid*="calendar-cell-date"]:not([class*="disabled"])',
                     # Оригинальные селекторы
@@ -3728,13 +3732,24 @@ class WBBrowserAutomationPro:
                     '[role="button"]:not([disabled])'
                 ]
                 
-                for selector in date_selectors:
+                for selector_idx, selector in enumerate(date_selectors):
                     try:
                         available_dates = self.page.locator(selector)
                         count = await available_dates.count()
                         
+                        logger.info(f"🔍 Селектор #{selector_idx + 1}/{len(date_selectors)}: {selector} → Найдено: {count} элементов")
+                        
                         if count > 0:
                             logger.info(f"✅ Найдено {count} доступных дат через селектор: {selector}")
+                            
+                            # Логируем первые 3 элемента для отладки
+                            for debug_i in range(min(3, count)):
+                                try:
+                                    debug_elem = available_dates.nth(debug_i)
+                                    debug_text = await debug_elem.text_content()
+                                    logger.info(f"   Элемент {debug_i + 1}: '{debug_text}'")
+                                except:
+                                    pass
                             
                             # Выбираем дату с учетом min_hours_ahead
                             from datetime import datetime, timedelta
@@ -3749,8 +3764,11 @@ class WBBrowserAutomationPro:
                                 except:
                                     pass
                             
+                            # Флаг для режима быстрого бронирования
+                            is_quick_booking = not custom_date and not target_coefficient and not selected_dates and not use_max_coefficient
+                            
                             # НОВАЯ ЛОГИКА: БЫСТРОЕ БРОНИРОВАНИЕ - проверяем ВСЕ даты подряд
-                            if not custom_date and not target_coefficient and not selected_dates and not use_max_coefficient:
+                            if is_quick_booking:
                                 logger.info(f"🚀 РЕЖИМ БЫСТРОГО БРОНИРОВАНИЯ: проверяю ВСЕ даты >= {min_hours_ahead}ч")
                                 
                                 # Вычисляем минимальную допустимую дату
@@ -3804,21 +3822,22 @@ class WBBrowserAutomationPro:
                                         
                                         # СРАЗУ ПРОБУЕМ КЛИКНУТЬ
                                         logger.info(f"🖱️ Навожу мышь на дату: {date_text}")
-                                        await date_element.hover(timeout=3000, force=True)
-                                        await asyncio.sleep(0.5)
+                                        await date_element.hover(timeout=2000, force=True)
+                                        await asyncio.sleep(0.3)  # БЫСТРЕЕ!
                                         
                                         # Ищем кнопку "Выбрать"
                                         select_selectors = [
                                             'button[data-testid*="choose-date"]',
                                             'button:has-text("Выбрать")',
-                                            'button[class*="button__QmJ2ep"]'
+                                            'button[class*="button__QmJ2ep"]',
+                                            'button:visible'  # Любая видимая кнопка как fallback
                                         ]
                                         
                                         select_button = None
                                         for sel_selector in select_selectors:
                                             try:
                                                 select_button = self.page.locator(sel_selector).first
-                                                if await select_button.is_visible(timeout=2000):
+                                                if await select_button.is_visible(timeout=1000):
                                                     break
                                             except:
                                                 continue
@@ -3826,7 +3845,7 @@ class WBBrowserAutomationPro:
                                         if select_button and await select_button.is_visible():
                                             logger.info(f"🎯 Кликаю на кнопку 'Выбрать' для даты {parsed_date.strftime('%d.%m.%Y')}")
                                             await select_button.click()
-                                            await asyncio.sleep(2)
+                                            await asyncio.sleep(1)  # БЫСТРЕЕ!
                                             
                                             # Ищем кнопку подтверждения
                                             confirm_selectors = [
@@ -3838,8 +3857,9 @@ class WBBrowserAutomationPro:
                                             for conf_selector in confirm_selectors:
                                                 try:
                                                     confirm_btn = self.page.locator(conf_selector).first
-                                                    if await confirm_btn.is_visible(timeout=2000):
+                                                    if await confirm_btn.is_visible(timeout=1500):
                                                         await confirm_btn.click()
+                                                        await asyncio.sleep(0.5)
                                                         logger.info(f"✅ Подтверждение нажато для даты {parsed_date.strftime('%d.%m.%Y')}")
                                                         booked = True
                                                         break
@@ -3903,98 +3923,98 @@ class WBBrowserAutomationPro:
                                     # Если не нашли, используем минимальную допустимую дату
                                     target_date = datetime.now() + timedelta(hours=min_hours_ahead)
                                 logger.info(f"📊 Используем дату с максимальным коэффициентом (не ближе {min_hours_ahead}ч): {target_date}")
-                            else:
-                                # По умолчанию: ПЕРВАЯ активная дата НЕ БЛИЖЕ чем min_hours_ahead
-                                target_date = await self._find_first_available_date_with_min_hours(available_dates, min_hours_ahead)
-                                if not target_date:
-                                    # Если не нашли активную дату, используем минимальную допустимую
-                                    target_date = datetime.now() + timedelta(hours=min_hours_ahead)
-                                logger.info(f"🎯 Используем ПЕРВУЮ доступную дату (не ближе {min_hours_ahead}ч = {min_hours_ahead/24:.1f} дней): {target_date}")
                             
-                            target_day = target_date.day
-                            target_month = target_date.month
-                            target_year = target_date.year
-                            
-                            logger.info(f"🎯 ИЩЕМ ТОЧНУЮ ДАТУ: {target_date.strftime('%d %B %Y (%a)')} - день {target_day}, месяц {target_month}")
-                            
-                            # Ищем ИМЕННО эту дату, а не первую попавшуюся!
-                            target_date_found = False
-                            for i in range(count):
-                                date_element = available_dates.nth(i)
+                            # ДЛЯ ОСТАЛЬНЫХ РЕЖИМОВ (custom_date, target_coefficient) продолжаем старую логику
+                            if custom_date or target_coefficient or selected_dates or use_max_coefficient:
+                                target_day = target_date.day
+                                target_month = target_date.month
+                                target_year = target_date.year
                                 
-                                # Пробуем получить дату из атрибутов
-                                date_text = None
-                                for attr in ['data-date', 'data-value', 'aria-label', 'title']:
-                                    try:
-                                        date_text = await date_element.get_attribute(attr)
-                                        if date_text:
-                                            break
-                                    except:
-                                        continue
+                                logger.info(f"🎯 ИЩЕМ ТОЧНУЮ ДАТУ: {target_date.strftime('%d %B %Y (%a)')} - день {target_day}, месяц {target_month}")
                                 
-                                # Если не нашли в атрибутах, берем текст
-                                if not date_text:
-                                    date_text = await date_element.text_content()
-                                
-                                logger.info(f"📅 Проверяю дату: {date_text}")
-                                
-                                # КРИТИЧНО: парсим дату и проверяем что она НЕ СЕГОДНЯ!
-                                if date_text:
-                                    try:
-                                        import re
-                                        # Очищаем текст от лишнего мусора (логистика, хранение и т.д.)
-                                        clean_date_text = re.sub(r'(Приёмка|Бесплатно|Логистика|Хранение|Отмена|\d+%)', '', date_text)
-                                        
-                                        # Ищем паттерн "число месяц"
-                                        date_match = re.search(r'(\d{1,2})\s+(\w+)', clean_date_text)
-                                        if date_match:
-                                            day = int(date_match.group(1))
-                                            month_name = date_match.group(2)
+                                # Ищем ИМЕННО эту дату, а не первую попавшуюся!
+                                target_date_found = False
+                                for i in range(count):
+                                    date_element = available_dates.nth(i)
+                                    
+                                    # Пробуем получить дату из атрибутов
+                                    date_text = None
+                                    for attr in ['data-date', 'data-value', 'aria-label', 'title']:
+                                        try:
+                                            date_text = await date_element.get_attribute(attr)
+                                            if date_text:
+                                                break
+                                        except:
+                                            continue
+                                    
+                                    # Если не нашли в атрибутах, берем текст
+                                    if not date_text:
+                                        date_text = await date_element.text_content()
+                                    
+                                    logger.info(f"📅 Проверяю дату: {date_text}")
+                                    
+                                    # КРИТИЧНО: парсим дату и проверяем что она НЕ СЕГОДНЯ!
+                                    if date_text:
+                                        try:
+                                            import re
+                                            # Очищаем текст от лишнего мусора (логистика, хранение и т.д.)
+                                            clean_date_text = re.sub(r'(Приёмка|Бесплатно|Логистика|Хранение|Отмена|\d+%)', '', date_text)
                                             
-                                            # Словарь месяцев
-                                            months = {
-                                                'января': 1, 'февраля': 2, 'марта': 3, 'апреля': 4,
-                                                'мая': 5, 'июня': 6, 'июля': 7, 'августа': 8,
-                                                'сентября': 9, 'октября': 10, 'ноября': 11, 'декабря': 12
-                                            }
+                                            # Ищем паттерн "число месяц"
+                                            date_match = re.search(r'(\d{1,2})\s+(\w+)', clean_date_text)
+                                            if date_match:
+                                                day = int(date_match.group(1))
+                                                month_name = date_match.group(2)
+                                                
+                                                # Словарь месяцев
+                                                months = {
+                                                    'января': 1, 'февраля': 2, 'марта': 3, 'апреля': 4,
+                                                    'мая': 5, 'июня': 6, 'июля': 7, 'августа': 8,
+                                                    'сентября': 9, 'октября': 10, 'ноября': 11, 'декабря': 12
+                                                }
                                             
-                                            if month_name in months:
-                                                month = months[month_name]
-                                                current_year = datetime.now().year
-                                                
-                                                # Создаем дату
-                                                parsed_date = datetime(current_year, month, day)
-                                                
-                                                # Если дата в прошлом, берем следующий год
-                                                if parsed_date < datetime.now():
-                                                    parsed_date = datetime(current_year + 1, month, day)
-                                                
-                                                logger.info(f"🔍 Распарсенная дата: {parsed_date}, целевая дата: {target_date}")
-                                                
-                                                # БЛЯДСКАЯ ТОЧНАЯ ПРОВЕРКА! НЕ "ПОДХОДЯЩАЯ", А "ТОЧНАЯ"!
-                                                if parsed_date.day == target_day and parsed_date.month == target_month:
-                                                    logger.info(f"🎯 ЭТО ОНА! ТОЧНАЯ ДАТА: {clean_date_text} = {target_day}.{target_month}")
-                                                    target_date_found = True
-                                                else:
-                                                    logger.info(f"❌ Дата {clean_date_text} ({parsed_date.day}.{parsed_date.month}) != нужной ({target_day}.{target_month})")
-                                                    continue
-                                    except Exception as e:
-                                        logger.warning(f"⚠️ Ошибка парсинга даты '{date_text}': {e}")
-                                        # НЕ принимаем дату если не можем распарсить!
+                                                if month_name in months:
+                                                    month = months[month_name]
+                                                    current_year = datetime.now().year
+                                                    
+                                                    # Создаем дату
+                                                    parsed_date = datetime(current_year, month, day)
+                                                    
+                                                    # Если дата в прошлом, берем следующий год
+                                                    if parsed_date < datetime.now():
+                                                        parsed_date = datetime(current_year + 1, month, day)
+                                                    
+                                                    logger.info(f"🔍 Распарсенная дата: {parsed_date}, целевая дата: {target_date}")
+                                                    
+                                                    # БЛЯДСКАЯ ТОЧНАЯ ПРОВЕРКА! НЕ "ПОДХОДЯЩАЯ", А "ТОЧНАЯ"!
+                                                    if parsed_date.day == target_day and parsed_date.month == target_month:
+                                                        logger.info(f"🎯 ЭТО ОНА! ТОЧНАЯ ДАТА: {clean_date_text} = {target_day}.{target_month}")
+                                                        target_date_found = True
+                                                    else:
+                                                        logger.info(f"❌ Дата {clean_date_text} ({parsed_date.day}.{parsed_date.month}) != нужной ({target_day}.{target_month})")
+                                                        continue
+                                        except Exception as e:
+                                            logger.warning(f"⚠️ Ошибка парсинга даты '{date_text}': {e}")
+                                            # НЕ принимаем дату если не можем распарсить!
+                                            continue
+                                    
+                                    # Для режима быстрого бронирования НЕ проверяем точную дату
+                                    if is_quick_booking:
+                                        # Уже обработано выше в блоке быстрого бронирования
                                         continue
-                                
-                                if not target_date_found:
-                                    logger.info(f"❌ Дата {date_text} не та что нужна, ищу дальше...")
-                                    continue
-                                
-                                # КРИТИЧЕСКИ ВАЖНО: кнопка появляется только при hover на дату!
-                                logger.info(f"🖱️ Навожу мышь на дату: {date_text}")
-                                try:
-                                    await date_element.hover(timeout=3000, force=True)
-                                    await asyncio.sleep(0.5)  # Увеличиваем время ожидания появления кнопки
-                                except Exception as hover_error:
-                                    logger.warning(f"⚠️ Ошибка наведения на дату {date_text}: {hover_error}")
-                                    continue  # Пропускаем эту дату
+                                    
+                                    if not target_date_found:
+                                        logger.info(f"❌ Дата {date_text} не та что нужна, ищу дальше...")
+                                        continue
+                                    
+                                    # КРИТИЧЕСКИ ВАЖНО: кнопка появляется только при hover на дату!
+                                    logger.info(f"🖱️ Навожу мышь на дату: {date_text}")
+                                    try:
+                                        await date_element.hover(timeout=3000, force=True)
+                                        await asyncio.sleep(0.5)  # Увеличиваем время ожидания появления кнопки
+                                    except Exception as hover_error:
+                                        logger.warning(f"⚠️ Ошибка наведения на дату {date_text}: {hover_error}")
+                                        continue  # Пропускаем эту дату
                                 
                                 # Ждем появления кнопки "Выбрать" с несколькими попытками
                                 select_button = None
