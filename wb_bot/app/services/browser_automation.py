@@ -3749,7 +3749,120 @@ class WBBrowserAutomationPro:
                                 except:
                                     pass
                             
-                            # ОПРЕДЕЛЯЕМ ЦЕЛЕВУЮ ДАТУ
+                            # НОВАЯ ЛОГИКА: БЫСТРОЕ БРОНИРОВАНИЕ - проверяем ВСЕ даты подряд
+                            if not custom_date and not target_coefficient and not selected_dates and not use_max_coefficient:
+                                logger.info(f"🚀 РЕЖИМ БЫСТРОГО БРОНИРОВАНИЯ: проверяю ВСЕ даты >= {min_hours_ahead}ч")
+                                
+                                # Вычисляем минимальную допустимую дату
+                                min_date = datetime.now() + timedelta(hours=min_hours_ahead)
+                                logger.info(f"📅 Минимальная дата: {min_date.strftime('%d.%m.%Y %H:%M')}")
+                                
+                                # ПЕРЕБИРАЕМ ВСЕ ДАТЫ И КЛИКАЕМ НА ПЕРВУЮ ПОДХОДЯЩУЮ
+                                booked = False
+                                for i in range(count):
+                                    date_element = available_dates.nth(i)
+                                    
+                                    try:
+                                        date_text = await date_element.text_content()
+                                        if not date_text:
+                                            continue
+                                        
+                                        # Парсим дату
+                                        import re
+                                        clean_date_text = re.sub(r'(Приёмка|Бесплатно|Логистика|Хранение|Отмена|\d+%)', '', date_text)
+                                        date_match = re.search(r'(\d{1,2})\s+(\w+)', clean_date_text)
+                                        
+                                        if not date_match:
+                                            continue
+                                        
+                                        day = int(date_match.group(1))
+                                        month_name = date_match.group(2)
+                                        
+                                        months = {
+                                            'января': 1, 'февраля': 2, 'марта': 3, 'апреля': 4,
+                                            'мая': 5, 'июня': 6, 'июля': 7, 'августа': 8,
+                                            'сентября': 9, 'октября': 10, 'ноября': 11, 'декабря': 12
+                                        }
+                                        
+                                        if month_name not in months:
+                                            continue
+                                        
+                                        month = months[month_name]
+                                        current_year = datetime.now().year
+                                        parsed_date = datetime(current_year, month, day)
+                                        
+                                        # Если дата в прошлом, берем следующий год
+                                        if parsed_date < datetime.now():
+                                            parsed_date = datetime(current_year + 1, month, day)
+                                        
+                                        # ПРОВЕРЯЕМ ЧТО ДАТА >= min_hours_ahead
+                                        if parsed_date < min_date:
+                                            logger.debug(f"⏭️ Дата {parsed_date.strftime('%d.%m.%Y')} слишком близко, пропускаю")
+                                            continue
+                                        
+                                        logger.info(f"✅ Найдена подходящая дата: {parsed_date.strftime('%d.%m.%Y')} (>= {min_date.strftime('%d.%m.%Y %H:%M')})")
+                                        
+                                        # СРАЗУ ПРОБУЕМ КЛИКНУТЬ
+                                        logger.info(f"🖱️ Навожу мышь на дату: {date_text}")
+                                        await date_element.hover(timeout=3000, force=True)
+                                        await asyncio.sleep(0.5)
+                                        
+                                        # Ищем кнопку "Выбрать"
+                                        select_selectors = [
+                                            'button[data-testid*="choose-date"]',
+                                            'button:has-text("Выбрать")',
+                                            'button[class*="button__QmJ2ep"]'
+                                        ]
+                                        
+                                        select_button = None
+                                        for sel_selector in select_selectors:
+                                            try:
+                                                select_button = self.page.locator(sel_selector).first
+                                                if await select_button.is_visible(timeout=2000):
+                                                    break
+                                            except:
+                                                continue
+                                        
+                                        if select_button and await select_button.is_visible():
+                                            logger.info(f"🎯 Кликаю на кнопку 'Выбрать' для даты {parsed_date.strftime('%d.%m.%Y')}")
+                                            await select_button.click()
+                                            await asyncio.sleep(2)
+                                            
+                                            # Ищем кнопку подтверждения
+                                            confirm_selectors = [
+                                                'button:has-text("Подтвердить")',
+                                                'button:has-text("Забронировать")',
+                                                'button[class*="primary"]'
+                                            ]
+                                            
+                                            for conf_selector in confirm_selectors:
+                                                try:
+                                                    confirm_btn = self.page.locator(conf_selector).first
+                                                    if await confirm_btn.is_visible(timeout=2000):
+                                                        await confirm_btn.click()
+                                                        logger.info(f"✅ Подтверждение нажато для даты {parsed_date.strftime('%d.%m.%Y')}")
+                                                        booked = True
+                                                        break
+                                                except:
+                                                    continue
+                                            
+                                            if booked:
+                                                result["success"] = True
+                                                result["booked_date"] = parsed_date.strftime('%d.%m.%Y')
+                                                result["message"] = f"✅ Поставка забронирована на {parsed_date.strftime('%d.%m.%Y')}"
+                                                logger.info(f"🎉 УСПЕШНО ЗАБРОНИРОВАНО на {parsed_date.strftime('%d.%m.%Y')}")
+                                                return result
+                                            
+                                    except Exception as e:
+                                        logger.debug(f"Ошибка обработки даты {i}: {e}")
+                                        continue
+                                
+                                if not booked:
+                                    result["message"] = f"❌ Не найдено доступных дат >= {min_hours_ahead}ч ({min_hours_ahead/24:.1f} дней)"
+                                    logger.warning(result["message"])
+                                    return result
+                            
+                            # ОПРЕДЕЛЯЕМ ЦЕЛЕВУЮ ДАТУ (для других режимов)
                             if selected_dates and target_coefficient is not None:
                                 # Новая логика: ищем подходящую дату из списка выбранных пользователем
                                 target_date = await self._find_suitable_date_from_list(selected_dates, target_coefficient, available_dates)
